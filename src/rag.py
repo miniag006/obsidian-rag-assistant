@@ -37,6 +37,28 @@ class RAGResponse:
     is_insufficient_info: bool
 
 
+def contextualize_query_for_search(query: str, chat_history: Optional[List[dict]] = None) -> str:
+    """
+    If the query contains pronouns ('it', 'its', 'this', 'these', 'them') or is a short follow-up,
+    augments the search query with the subject of the previous user message.
+    """
+    if not chat_history:
+        return query
+
+    pronouns = {"it", "its", "this", "these", "they", "them", "that", "above", "also", "more"}
+    words = set(query.lower().split())
+    has_pronoun = bool(words & pronouns)
+    is_short_followup = len(words) <= 6
+
+    if has_pronoun or is_short_followup:
+        prev_user_queries = [m["content"] for m in chat_history if m.get("role") == "user" and m.get("content")]
+        if prev_user_queries:
+            last_q = prev_user_queries[-1]
+            return f"{last_q} {query}"
+
+    return query
+
+
 def format_context_for_llm(chunks: List[RetrievedChunk]) -> str:
     """
     Formats retrieved chunks into a clean, structured context string for the LLM prompt.

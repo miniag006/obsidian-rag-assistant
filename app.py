@@ -14,7 +14,7 @@ from openai import OpenAI
 from src.loader import load_vault, NoteDocument
 from src.chunker import chunk_vault, NoteChunk
 from src.vectorstore import VaultVectorStore, RetrievedChunk, get_default_client
-from src.rag import generate_rag_answer, RAGResponse, FALLBACK_MESSAGE
+from src.rag import generate_rag_answer, RAGResponse, FALLBACK_MESSAGE, contextualize_query_for_search
 from src.utils import highlight_passages_in_markdown, extract_vault_zip
 
 # Load environment variables from .env if present
@@ -369,8 +369,9 @@ if user_input:
         with st.chat_message("assistant"):
             with st.spinner("Searching Obsidian vault and reasoning with Gemini..."):
                 try:
-                    # Semantic Search
-                    retrieved = st.session_state.vector_store.search(user_input, top_k=5)
+                    # Contextualize query for conversational follow-ups (e.g. pronouns like 'its', 'these')
+                    search_query = contextualize_query_for_search(user_input, st.session_state.messages[:-1])
+                    retrieved = st.session_state.vector_store.search(search_query, top_k=5)
                     
                     # Generate Answer
                     client, model_name, _ = create_client_for_key(api_key)
