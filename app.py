@@ -57,6 +57,8 @@ st.set_page_config(
 # Custom Styling for polished MVP look
 st.markdown("""
 <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
     .main-header {
         font-size: 2.2rem;
         font-weight: 700;
