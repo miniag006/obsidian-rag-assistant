@@ -7,7 +7,6 @@ Powered by Google Gemini API (Free Tier from Google AI Studio) & ChromaDB.
 import os
 from pathlib import Path
 import shutil
-import tempfile
 import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -16,7 +15,7 @@ from src.loader import load_vault, NoteDocument
 from src.chunker import chunk_vault, NoteChunk
 from src.vectorstore import VaultVectorStore, RetrievedChunk, get_default_client
 from src.rag import generate_rag_answer, RAGResponse, FALLBACK_MESSAGE
-from src.utils import highlight_passage_in_markdown, extract_vault_zip
+from src.utils import highlight_passages_in_markdown, extract_vault_zip
 
 # Load environment variables from .env if present
 load_dotenv()
@@ -233,7 +232,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📊 Vault Statistics")
     if st.session_state.vault_name:
-        active_model = getattr(st.session_state, "active_model", "gemini-2.0-flash")
+        active_model = getattr(st.session_state, "active_model", "gemini-1.5-flash")
         active_emb = getattr(st.session_state, "active_embedding", "text-embedding-004")
         st.info(f"**Active Vault:** {st.session_state.vault_name}\n\n"
                 f"- 📄 **Notes Indexed:** {len(st.session_state.loaded_notes)}\n"
@@ -274,7 +273,49 @@ with st.sidebar:
 st.markdown('<div class="main-header">🧠 Obsidian Vault RAG Knowledge Assistant</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Query your personal Obsidian knowledge base with verifiable source citations and exact passage highlighting. Powered by Google Gemini (Free).</div>', unsafe_allow_html=True)
 
-# Document / Source Viewer Panel (if user clicked a source)
+
+# Display Chat Conversation
+for idx, msg in enumerate(st.session_state.messages):
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+        
+        # Display Deduplicated Source Buttons for Assistant Responses
+        if msg["role"] == "assistant" and "sources" in msg and msg["sources"]:
+            st.markdown("##### 📚 Sources Used:")
+            
+            raw_chunks = msg.get("retrieved_chunks", [])
+            # Group all chunks by unique filename
+            file_chunks_map = {}
+            for chunk in raw_chunks:
+                if chunk.filename not in file_chunks_map:
+                    file_chunks_map[chunk.filename] = []
+                file_chunks_map[chunk.filename].append(chunk)
+            
+            cols = st.columns(max(len(file_chunks_map), 1))
+            for c_idx, (fname, chunks_list) in enumerate(file_chunks_map.items()):
+                with cols[c_idx]:
+                    sec_count = len(chunks_list)
+                    label_suffix = f" ({sec_count} sections)" if sec_count > 1 else ""
+                    btn_label = f"📄 {fname}{label_suffix}"
+                    
+                    if st.button(
+                        btn_label,
+                        key=f"src_btn_{idx}_{c_idx}_{fname}",
+                        help=f"Click to open {fname} and highlight all {sec_count} retrieved passage(s)",
+                        use_container_width=True
+                    ):
+                        st.session_state.viewing_source = {
+                            "filename": fname,
+                            "title": chunks_list[0].title,
+                            "sections": [c.heading for c in chunks_list],
+                            "passages": [c.text for c in chunks_list],
+                            "max_similarity": max(c.similarity_score for c in chunks_list),
+                            "count": sec_count
+                        }
+                        st.rerun()
+
+
+# Document / Source Viewer Panel rendered at the BOTTOM
 if st.session_state.viewing_source:
     src_info = st.session_state.viewing_source
     st.markdown("---")
@@ -282,62 +323,26 @@ if st.session_state.viewing_source:
     col_hdr, col_btn = st.columns([5, 1])
     with col_hdr:
         st.markdown(f"### 📖 Source Document: `{src_info['filename']}`")
-        st.caption(f"**Section:** {src_info['heading']} | **Relevance Score:** {src_info['similarity_score']:.2%} | **Chunk ID:** `{src_info['chunk_id']}`")
+        sections_str = ", ".join(f"`{s}`" for s in src_info.get("sections", []))
+        st.caption(f"**Sections Cited:** {sections_str} | **Passages Highlighted:** {src_info.get('count', 1)} | **Max Relevance:** {src_info.get('max_similarity', 0):.1%}")
     with col_btn:
         if st.button("✖️ Close Viewer", key="close_source_viewer", use_container_width=True):
             st.session_state.viewing_source = None
             st.rerun()
 
-    # Locate note and highlight passage
+    # Locate note and highlight all passages
     full_doc = st.session_state.loaded_notes.get(src_info["filename"])
     if full_doc:
-        highlighted_content, found = highlight_passage_in_markdown(
+        passages = src_info.get("passages", [])
+        highlighted_content, count = highlight_passages_in_markdown(
             full_content=full_doc.content,
-            passage=src_info["text"],
-            heading=src_info["heading"]
+            passages=passages
         )
         st.markdown(highlighted_content, unsafe_allow_html=True)
     else:
         st.warning(f"Could not find full note for `{src_info['filename']}`.")
-        st.markdown(f"**Retrieved Passage:**\n\n> {src_info['text']}")
     
     st.markdown("---")
-
-
-# Display Chat Conversation
-for idx, msg in enumerate(st.session_state.messages):
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        
-        # Display Sources and Clickable Buttons for Assistant Responses
-        if msg["role"] == "assistant" and "sources" in msg and msg["sources"]:
-            st.markdown("##### 📚 Sources Used:")
-            
-            retrieved_chunks = msg.get("retrieved_chunks", [])
-            
-            # Create a row of source buttons
-            cols = st.columns(min(len(retrieved_chunks), 4) or 1)
-            for c_idx, chunk in enumerate(retrieved_chunks):
-                col = cols[c_idx % len(cols)]
-                with col:
-                    btn_label = f"📄 {chunk.filename} ({chunk.similarity_score:.0%})"
-                    if st.button(
-                        btn_label,
-                        key=f"src_btn_{idx}_{c_idx}_{chunk.chunk_id}",
-                        help=f"Click to inspect {chunk.filename} and highlight the retrieved passage under '{chunk.heading}'",
-                        use_container_width=True
-                    ):
-                        st.session_state.viewing_source = {
-                            "filename": chunk.filename,
-                            "title": chunk.title,
-                            "heading": chunk.heading,
-                            "similarity_score": chunk.similarity_score,
-                            "chunk_id": chunk.chunk_id,
-                            "text": chunk.text
-                        }
-                        st.rerun()
-
-
 
 
 # User Question Input Handling
@@ -383,24 +388,32 @@ if user_input:
                     # Display Sources
                     if rag_res.sources and rag_res.retrieved_chunks:
                         st.markdown("##### 📚 Sources Used:")
-                        cols = st.columns(min(len(rag_res.retrieved_chunks), 4) or 1)
-                        for c_idx, chunk in enumerate(rag_res.retrieved_chunks):
-                            col = cols[c_idx % len(cols)]
-                            with col:
-                                btn_label = f"📄 {chunk.filename} ({chunk.similarity_score:.0%})"
+                        
+                        file_chunks_map = {}
+                        for chunk in rag_res.retrieved_chunks:
+                            if chunk.filename not in file_chunks_map:
+                                file_chunks_map[chunk.filename] = []
+                            file_chunks_map[chunk.filename].append(chunk)
+                        
+                        cols = st.columns(max(len(file_chunks_map), 1))
+                        for c_idx, (fname, chunks_list) in enumerate(file_chunks_map.items()):
+                            with cols[c_idx]:
+                                sec_count = len(chunks_list)
+                                label_suffix = f" ({sec_count} sections)" if sec_count > 1 else ""
+                                btn_label = f"📄 {fname}{label_suffix}"
                                 if st.button(
                                     btn_label,
-                                    key=f"live_src_{c_idx}_{chunk.chunk_id}",
-                                    help=f"Click to inspect {chunk.filename} and highlight the retrieved passage under '{chunk.heading}'",
+                                    key=f"live_src_{c_idx}_{fname}",
+                                    help=f"Click to open {fname} and highlight all {sec_count} retrieved passage(s)",
                                     use_container_width=True
                                 ):
                                     st.session_state.viewing_source = {
-                                        "filename": chunk.filename,
-                                        "title": chunk.title,
-                                        "heading": chunk.heading,
-                                        "similarity_score": chunk.similarity_score,
-                                        "chunk_id": chunk.chunk_id,
-                                        "text": chunk.text
+                                        "filename": fname,
+                                        "title": chunks_list[0].title,
+                                        "sections": [c.heading for c in chunks_list],
+                                        "passages": [c.text for c in chunks_list],
+                                        "max_similarity": max(c.similarity_score for c in chunks_list),
+                                        "count": sec_count
                                     }
                                     st.rerun()
 

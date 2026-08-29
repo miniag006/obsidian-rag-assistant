@@ -65,7 +65,7 @@ class TestObsidianRAGPipeline(unittest.TestCase):
                 heading=chunk.heading
             )
             self.assertTrue(found, f"Passage highlighting failed for chunk: {chunk.chunk_id}")
-            self.assertIn("Retrieved Passage Used in Answer:", highlighted)
+            self.assertIn("📌 Retrieved Passage", highlighted)
 
     def test_context_formatting(self):
         """Verify retrieved chunks are formatted with source attribution tags."""
