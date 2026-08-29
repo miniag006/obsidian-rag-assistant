@@ -1,7 +1,7 @@
 """
 Obsidian Vault RAG Knowledge Assistant - Streamlit Application
 A student-level 1-week MVP for conversational RAG over Obsidian Markdown vaults.
-Powered by Google Gemini API (Free Tier from Google AI Studio) & ChromaDB.
+Powered by Google Gemini API & ChromaDB.
 """
 
 import os
@@ -64,7 +64,14 @@ st.markdown("""
     .sub-header {
         font-size: 1.05rem;
         color: #94a3b8;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1.2rem;
+    }
+    .upload-highlight-box {
+        background: rgba(99, 102, 241, 0.08);
+        border: 1.5px dashed #6366f1;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 12px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -177,16 +184,17 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📚 Knowledge Vault")
 
+    # CHANGE 2: Make vault upload option prominent and noticeable
     vault_source = st.radio(
-        "Select Vault Source",
-        options=["Preloaded Demo Vault", "Upload Custom Vault"],
+        "Choose Vault Source:",
+        options=["⚡ Preloaded Demo Vault", "📤 Upload Your Own Vault (.md / .zip)"],
         index=0
     )
 
     demo_vault_dir = Path("data/demo_vault")
 
-    if vault_source == "Preloaded Demo Vault":
-        st.caption("Preloaded notes: RAG, LLMs, Embeddings, Vector Databases, and AI Agents.")
+    if vault_source == "⚡ Preloaded Demo Vault":
+        st.caption("Preloaded AI notes: RAG, LLMs, Embeddings, Vector Databases, and AI Agents.")
         if st.button("🚀 Load Demo Vault", use_container_width=True):
             if not api_key:
                 st.session_state.vault_load_error = "Please provide an API Key above to index the demo vault."
@@ -194,16 +202,22 @@ with st.sidebar:
                 initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
                 st.rerun()
 
-    elif vault_source == "Upload Custom Vault":
-        st.caption("Upload multiple `.md` files or a `.zip` archive:")
+    elif vault_source == "📤 Upload Your Own Vault (.md / .zip)":
+        st.markdown("""
+        <div class="upload-highlight-box">
+            <b>📂 Upload Your Obsidian Notes</b><br>
+            <span style="font-size: 0.85rem; color: #94a3b8;">Select multiple <code>.md</code> note files or a <code>.zip</code> archive of your vault:</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
         uploaded_files = st.file_uploader(
-            "Upload Notes (.md, .zip)",
+            "Select Markdown notes (.md) or Vault (.zip)",
             type=["zip", "md"],
             accept_multiple_files=True,
             help="Select one or multiple .md files or a zipped Obsidian vault."
         )
 
-        if uploaded_files and st.button("📥 Process & Index Vault", use_container_width=True):
+        if uploaded_files and st.button("📥 Process & Index Uploaded Vault", use_container_width=True):
             if not api_key:
                 st.session_state.vault_load_error = "Please enter an API Key to index the vault."
             else:
@@ -254,9 +268,11 @@ with st.sidebar:
     else:
         st.warning("No vault loaded yet. Enter your API key and click 'Load Demo Vault'.")
 
-    # Starter Questions
+    # CHANGE 4: Clarify Example Questions label
     st.markdown("---")
     st.subheader("💡 Example Questions")
+    st.caption("Example questions for Demo Vault")
+    
     example_prompts = [
         "What is RAG and why is it useful?",
         "How does ChromaDB perform vector search?",
@@ -281,8 +297,13 @@ with st.sidebar:
 
 
 # --- Main Chat Area ---
+# CHANGE 1: Removed "Powered by Google Gemini (Free)."
 st.markdown('<div class="main-header">🧠 Obsidian Vault RAG Knowledge Assistant</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Query your personal Obsidian knowledge base with verifiable source citations and exact passage highlighting. Powered by Google Gemini (Free).</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Query your personal Obsidian knowledge base with verifiable source citations and exact passage highlighting.</div>', unsafe_allow_html=True)
+
+# CHANGE 3: Simple initial dashboard instruction
+if not st.session_state.messages:
+    st.info("💡 **Use the toolbar to load the Demo Vault or upload your own Obsidian Vault.**")
 
 
 # Display Chat Conversation
@@ -359,10 +380,37 @@ for idx, msg in enumerate(st.session_state.messages):
                         passages=passages
                     )
                     st.markdown(highlighted_content, unsafe_allow_html=True)
+                    
+                    # CHANGE 6: Auto-scroll directly to the first retrieved passage in the viewer
+                    st.components.v1.html("""
+                    <script>
+                    setTimeout(function() {
+                        const target = window.parent.document.getElementById('first-retrieved-passage');
+                        if (target) {
+                            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    }, 200);
+                    </script>
+                    """, height=0)
                 else:
                     st.warning(f"Could not find full note for `{src_info['filename']}`.")
                 
                 st.markdown("---")
+
+
+# CHANGE 5: Anchor and script to auto-scroll smoothly to the latest question turn
+st.markdown('<div id="latest-turn-anchor"></div>', unsafe_allow_html=True)
+if st.session_state.messages:
+    st.components.v1.html("""
+    <script>
+    setTimeout(function() {
+        const anchor = window.parent.document.getElementById('latest-turn-anchor');
+        if (anchor) {
+            anchor.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+    }, 150);
+    </script>
+    """, height=0)
 
 
 # User Question Input Handling

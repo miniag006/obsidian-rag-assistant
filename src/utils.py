@@ -52,13 +52,6 @@ def highlight_passages_in_markdown(
     content = full_content
     found_count = 0
     total = len(passages)
-
-    highlight_start_template = (
-        '<div style="border-left: 4px solid #f59e0b; background: rgba(245, 158, 11, 0.15); '
-        'padding: 10px 14px; margin: 12px 0; border-radius: 4px; font-weight: 500;">\n'
-        '<span style="font-size: 0.8em; text-transform: uppercase; color: #d97706; font-weight: bold; '
-        'display: block; margin-bottom: 4px;">📌 Retrieved Passage [{idx}/{total}]:</span>\n\n'
-    )
     highlight_end = "\n\n</div>"
 
     for i, passage in enumerate(passages, start=1):
@@ -66,7 +59,13 @@ def highlight_passages_in_markdown(
         if not clean_passage:
             continue
 
-        banner = highlight_start_template.format(idx=i, total=total)
+        anchor_attr = ' id="first-retrieved-passage"' if i == 1 else ""
+        banner = (
+            f'<div{anchor_attr} style="border-left: 4px solid #f59e0b; background: rgba(245, 158, 11, 0.15); '
+            f'padding: 10px 14px; margin: 12px 0; border-radius: 4px; font-weight: 500;">\n'
+            f'<span style="font-size: 0.8em; text-transform: uppercase; color: #d97706; font-weight: bold; '
+            f'display: block; margin-bottom: 4px;">📌 Retrieved Passage [{i}/{total}]:</span>\n\n'
+        )
 
         if clean_passage in content:
             content = content.replace(clean_passage, f"{banner}{clean_passage}{highlight_end}", 1)
