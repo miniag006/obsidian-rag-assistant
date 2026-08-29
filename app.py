@@ -393,6 +393,7 @@ for idx, msg in enumerate(st.session_state.messages):
                                 "title": chunks_list[0].title,
                                 "sections": [c.heading for c in chunks_list],
                                 "passages": [c.text for c in chunks_list],
+                                "offsets": [(c.start_char, c.end_char) for c in chunks_list],
                                 "max_similarity": max(c.similarity_score for c in chunks_list),
                                 "count": sec_count
                             }
@@ -417,9 +418,11 @@ for idx, msg in enumerate(st.session_state.messages):
                 full_doc = get_loaded_note_document(src_info["filename"])
                 if full_doc:
                     passages = src_info.get("passages", [])
+                    offsets = src_info.get("offsets", [])
                     highlighted_content, count = highlight_passages_in_markdown(
                         full_content=full_doc.content,
-                        passages=passages
+                        passages=passages,
+                        offsets=offsets
                     )
                     st.markdown(highlighted_content, unsafe_allow_html=True)
                     

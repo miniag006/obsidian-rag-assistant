@@ -8,7 +8,7 @@ Utility functions for Obsidian Vault RAG Assistant:
 from pathlib import Path
 import re
 import shutil
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 import unicodedata
 import zipfile
 
@@ -43,65 +43,128 @@ def normalize_whitespace(text: str) -> str:
 
 def highlight_passages_in_markdown(
     full_content: str,
-    passages: List[str],
+    passages: Optional[List[str]] = None,
+    offsets: Optional[List[Tuple[int, int]]] = None,
+    chunks: Optional[List[Any]] = None,
 ) -> Tuple[str, int]:
     """
     Locates all retrieved passages within the full original Markdown note
-    and wraps each in an HTML <mark> highlight block.
+    using exact character offsets and robust multi-strategy fallback matching.
+    Applies HTML highlight blocks in reverse order to preserve exact character positions.
     """
-    content = full_content
-    found_count = 0
-    total = len(passages)
-    highlight_end = "\n\n</div>"
+    if not full_content:
+        return full_content, 0
 
-    for i, passage in enumerate(passages, start=1):
-        clean_passage = passage.strip()
-        if not clean_passage:
+    chunk_items = []
+    if chunks:
+        for c in chunks:
+            text = getattr(c, "text", "") or ""
+            start = getattr(c, "start_char", -1)
+            end = getattr(c, "end_char", -1)
+            heading = getattr(c, "heading", "")
+            chunk_items.append({"text": text, "start_char": start, "end_char": end, "heading": heading})
+    elif passages:
+        offsets_list = offsets or [(-1, -1)] * len(passages)
+        for p, off in zip(passages, offsets_list):
+            chunk_items.append({"text": p, "start_char": off[0], "end_char": off[1], "heading": ""})
+
+    if not chunk_items:
+        return full_content, 0
+
+    spans = []  # List of (start_pos, end_pos)
+    used_spans = set()
+
+    for item in chunk_items:
+        clean_text = item["text"].strip()
+        if not clean_text:
             continue
 
-        anchor_attr = ' id="first-retrieved-passage"' if i == 1 else ""
+        start_c = item.get("start_char", -1)
+        end_c = item.get("end_char", -1)
+        matched = False
+
+        # 1. Exact character offset slice match
+        if 0 <= start_c < end_c <= len(full_content):
+            doc_slice = full_content[start_c:end_c]
+            if doc_slice.strip() == clean_text or clean_text in doc_slice:
+                span_key = (start_c, end_c)
+                if span_key not in used_spans:
+                    spans.append(span_key)
+                    used_spans.add(span_key)
+                    matched = True
+
+        # 2. Exact substring search in full content
+        if not matched:
+            pos = full_content.find(clean_text)
+            if pos != -1:
+                span_key = (pos, pos + len(clean_text))
+                if span_key not in used_spans:
+                    spans.append(span_key)
+                    used_spans.add(span_key)
+                    matched = True
+
+        # 3. Paragraph boundaries match (first paragraph and last paragraph)
+        if not matched:
+            paragraphs = [p.strip() for p in clean_text.split("\n\n") if len(p.strip()) > 20]
+            if paragraphs:
+                p_first = paragraphs[0]
+                p_last = paragraphs[-1]
+                s_idx = full_content.find(p_first)
+                e_idx = full_content.find(p_last, s_idx) if s_idx != -1 else -1
+                if s_idx != -1 and e_idx != -1:
+                    e_idx += len(p_last)
+                    span_key = (s_idx, e_idx)
+                    if span_key not in used_spans:
+                        spans.append(span_key)
+                        used_spans.add(span_key)
+                        matched = True
+
+        # 4. Token-spaced regex match
+        if not matched:
+            tokens = [re.escape(tok) for tok in clean_text.split() if tok]
+            if tokens:
+                try:
+                    pattern = r"\s+".join(tokens)
+                    m = re.search(pattern, full_content)
+                    if m:
+                        span_key = (m.start(), m.end())
+                        if span_key not in used_spans:
+                            spans.append(span_key)
+                            used_spans.add(span_key)
+                            matched = True
+                except Exception:
+                    pass
+
+    if not spans:
+        return full_content, 0
+
+    # Sort spans in ascending reading order to assign 1..N numbers
+    sorted_spans = sorted(spans, key=lambda x: x[0])
+    total_spans = len(sorted_spans)
+    span_number_map = { span: idx + 1 for idx, span in enumerate(sorted_spans) }
+
+    # Sort in descending order to apply in-place string replacements safely
+    reverse_spans = sorted(spans, key=lambda x: x[0], reverse=True)
+    content = full_content
+
+    for s_pos, e_pos in reverse_spans:
+        idx_num = span_number_map.get((s_pos, e_pos), 1)
+        anchor_attr = ' id="first-retrieved-passage"' if idx_num == 1 else ""
         banner = (
             f'<div{anchor_attr} style="border-left: 4px solid #f59e0b; background: rgba(245, 158, 11, 0.15); '
             f'padding: 10px 14px; margin: 12px 0; border-radius: 4px; font-weight: 500;">\n'
             f'<span style="font-size: 0.8em; text-transform: uppercase; color: #d97706; font-weight: bold; '
-            f'display: block; margin-bottom: 4px;">📌 Retrieved Passage [{i}/{total}]:</span>\n\n'
+            f'display: block; margin-bottom: 4px;">📌 Retrieved Passage [{idx_num}/{total_spans}]:</span>\n\n'
         )
+        highlight_end = "\n\n</div>"
+        
+        content = content[:s_pos] + banner + content[s_pos:e_pos] + highlight_end + content[e_pos:]
 
-        if clean_passage in content:
-            content = content.replace(clean_passage, f"{banner}{clean_passage}{highlight_end}", 1)
-            found_count += 1
-            continue
-
-        paragraphs = [p.strip() for p in clean_passage.split("\n\n") if len(p.strip()) > 30]
-        if paragraphs and paragraphs[0] in content and paragraphs[-1] in content:
-            first_p = paragraphs[0]
-            last_p = paragraphs[-1]
-            start_idx = content.find(first_p)
-            end_idx = content.find(last_p, start_idx)
-            if start_idx != -1 and end_idx != -1:
-                end_idx += len(last_p)
-                matched_span = content[start_idx:end_idx]
-                content = content[:start_idx] + f"{banner}{matched_span}{highlight_end}" + content[end_idx:]
-                found_count += 1
-                continue
-
-        escaped_tokens = [re.escape(tok) for tok in clean_passage.split()]
-        if escaped_tokens:
-            fuzzy_pattern = r"\s+".join(escaped_tokens)
-            try:
-                match = re.search(fuzzy_pattern, content)
-                if match:
-                    matched_span = match.group(0)
-                    content = content[:match.start()] + f"{banner}{matched_span}{highlight_end}" + content[match.end():]
-                    found_count += 1
-            except Exception:
-                pass
-
-    return content, found_count
+    return content, total_spans
 
 
 def highlight_passage_in_markdown(full_content: str, passage: str, heading: Optional[str] = None) -> Tuple[str, bool]:
-    res, count = highlight_passages_in_markdown(full_content, [passage])
+    res, count = highlight_passages_in_markdown(full_content, passages=[passage])
     return res, count > 0
 
 
