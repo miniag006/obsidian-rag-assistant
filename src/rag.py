@@ -1,13 +1,15 @@
 """
 RAG Generation & Context Grounding Pipeline
 Constructs augmented prompts and queries the LLM with strict grounding rules.
-Supports Google Gemini API (Free tier) and OpenAI API with multi-model fallback.
+Supports Google Gemini API (Direct REST + certifi) and OpenAI API.
 """
 
 from dataclasses import dataclass
 import os
 from typing import List, Optional
+import certifi
 from openai import OpenAI
+import requests
 
 try:
     from src.vectorstore import RetrievedChunk, get_default_client
@@ -83,6 +85,57 @@ def format_context_for_llm(chunks: List[RetrievedChunk]) -> str:
     return "\n".join(context_blocks)
 
 
+def call_gemini_generate_rest(prompt: str, api_key: str, model: str = "gemini-1.5-flash") -> str:
+    """
+    Calls Google Gemini REST generateContent endpoint directly with certifi SSL verification.
+    Guarantees clean UTF-8 encoding without SDK wrapper serialization errors.
+    """
+    clean_key = api_key.strip()
+    candidate_models = [model, "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash"]
+    
+    seen = set()
+    models = []
+    for m in candidate_models:
+        if m and m not in seen:
+            seen.add(m)
+            models.append(m)
+
+    payload = {
+        "system_instruction": {
+            "parts": [{"text": SYSTEM_PROMPT}]
+        },
+        "contents": [
+            {
+                "parts": [{"text": prompt}]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.0,
+            "maxOutputTokens": 2048,
+        }
+    }
+
+    last_err = ""
+    for m in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={clean_key}"
+        try:
+            resp = requests.post(url, json=payload, timeout=30, verify=certifi.where())
+            if resp.status_code == 200:
+                data = resp.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        return parts[0].get("text", "").strip()
+            else:
+                last_err = f"Status {resp.status_code}: {resp.text}"
+        except Exception as e:
+            last_err = str(e)
+            continue
+
+    raise RuntimeError(f"Gemini generation error: {last_err}")
+
+
 def generate_rag_answer(
     query: str,
     retrieved_chunks: List[RetrievedChunk],
@@ -94,27 +147,11 @@ def generate_rag_answer(
     """
     Executes the grounded RAG generation step with robust multi-model fallback and unicode sanitization.
     """
-    if openai_client:
-        client = openai_client
-    else:
-        client, _ = get_default_client()
+    api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
+    if openai_client and getattr(openai_client, "api_key", None):
+        api_key = str(openai_client.api_key).strip()
 
-    is_gemini = os.getenv("GEMINI_API_KEY") or str(client.base_url).startswith("https://generativelanguage.googleapis.com")
-
-    # Build model candidate priority list
-    if is_gemini:
-        preferred = model_name or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-        candidates = [preferred, "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-2.5-flash", "gemini-3.6-flash"]
-    else:
-        preferred = model_name or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        candidates = [preferred, "gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
-
-    seen_models = set()
-    model_candidates = []
-    for m in candidates:
-        if m and m not in seen_models:
-            seen_models.add(m)
-            model_candidates.append(m)
+    is_gemini = not api_key.startswith("sk-") or bool(os.getenv("GEMINI_API_KEY"))
 
     valid_chunks = [c for c in retrieved_chunks if c.similarity_score >= similarity_threshold]
 
@@ -128,43 +165,48 @@ def generate_rag_answer(
 
     context_text = clean_unicode(format_context_for_llm(valid_chunks))
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
+    # Construct conversation history string
+    history_str = ""
     if chat_history:
-        for msg in chat_history[-4:]:
-            if msg.get("role") in ["user", "assistant"]:
-                cleaned_msg_content = clean_unicode(msg["content"])
-                messages.append({"role": msg["role"], "content": cleaned_msg_content})
+        recent = [m for m in chat_history[-4:] if m.get("role") in ["user", "assistant"]]
+        if recent:
+            history_blocks = [f"{m['role'].capitalize()}: {clean_unicode(m['content'])}" for m in recent]
+            history_str = "Prior Conversation:\n" + "\n".join(history_blocks) + "\n\n"
 
     user_prompt = clean_unicode(
+        f"{history_str}"
         f"Context from Obsidian Vault:\n"
         f"{context_text}\n\n"
         f"Question:\n{query}\n\n"
         f"Answer using the context above:"
     )
-    messages.append({"role": "user", "content": user_prompt})
 
-    answer = ""
-    last_error = None
-
-    for m in model_candidates:
-        try:
+    try:
+        if is_gemini and api_key:
+            # Direct REST Gemini call
+            answer = call_gemini_generate_rest(
+                prompt=user_prompt,
+                api_key=api_key,
+                model=model_name or "gemini-1.5-flash"
+            )
+        else:
+            # OpenAI API call
+            client = openai_client or OpenAI(api_key=api_key)
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ]
             response = client.chat.completions.create(
-                model=m,
+                model=model_name or "gpt-4o-mini",
                 messages=messages,
-                temperature=0.0,
+                temperature=0.0
             )
             answer = response.choices[0].message.content.strip()
-            if answer:
-                break
-        except Exception as e:
-            last_error = e
-            continue
 
-    if not answer:
-        err_text = f"Error generating answer from LLM: {str(last_error)}" if last_error else "Failed to generate answer."
+    except Exception as e:
+        answer = f"Error generating answer from LLM: {str(e)}"
         return RAGResponse(
-            answer=err_text,
+            answer=answer,
             sources=[],
             retrieved_chunks=retrieved_chunks,
             is_insufficient_info=False,
