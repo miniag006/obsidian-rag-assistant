@@ -59,21 +59,21 @@ st.markdown("""
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .main-header {
-        font-size: 2.2rem;
+        font-size: 2.1rem;
         font-weight: 700;
         margin-bottom: 0.2rem;
     }
     .sub-header {
-        font-size: 1.05rem;
+        font-size: 1.0rem;
         color: #64748b;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1.2rem;
     }
-    .source-card {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 12px 16px;
-        margin-bottom: 10px;
+    .vault-card {
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 16px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -145,7 +145,7 @@ def initialize_vault(vault_path: Path, vault_label: str, active_api_key: str):
             st.session_state.active_model = model_name
             st.session_state.active_embedding = embedding_model
             st.session_state.viewing_source = None
-            st.session_state.vault_load_success = f"Loaded {len(docs)} notes ({indexed_count} chunks)"
+            st.session_state.vault_load_success = f"✅ Successfully indexed {len(docs)} notes ({indexed_count} chunks) from '{vault_label}'"
             st.session_state.vault_load_error = None
         except Exception as e:
             st.session_state.vault_load_error = f"Error loading vault: {str(e)}"
@@ -157,7 +157,7 @@ server_key, provider = get_server_api_key()
 
 # --- Sidebar UI ---
 with st.sidebar:
-    st.title("⚙️ Vault Settings")
+    st.title("⚙️ Assistant Settings")
 
     if server_key:
         st.success(f"🔒 **API Key:** Configured ({provider})")
@@ -172,65 +172,6 @@ with st.sidebar:
         )
         st.caption("✨ [Get a Free Gemini API Key at aistudio.google.com](https://aistudio.google.com/) (no credit card needed).")
         api_key = user_key_input.strip()
-
-    st.markdown("---")
-    st.subheader("📚 Knowledge Vault")
-
-    vault_source = st.radio(
-        "Select Vault Source",
-        options=["Preloaded Demo Vault", "Upload Custom Vault"],
-        index=0
-    )
-
-    demo_vault_dir = Path("data/demo_vault")
-
-    if vault_source == "Preloaded Demo Vault":
-        st.caption("Preloaded notes: RAG, LLMs, Embeddings, Vector Databases, and AI Agents.")
-        if st.button("🚀 Load Demo Vault", use_container_width=True):
-            if not api_key:
-                st.session_state.vault_load_error = "Please provide an API Key above to index the demo vault."
-            else:
-                initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
-
-    elif vault_source == "Upload Custom Vault":
-        st.caption("Upload a `.zip` archive containing your Obsidian vault, or select multiple `.md` files at once.")
-        uploaded_files = st.file_uploader(
-            "Upload Vault ZIP or Markdown Notes",
-            type=["zip", "md"],
-            accept_multiple_files=True,
-            help="Select one or more .md note files or a zipped Obsidian vault."
-        )
-
-        if uploaded_files and st.button("📥 Process & Index Vault", use_container_width=True):
-            if not api_key:
-                st.session_state.vault_load_error = "Please enter an API Key to index the vault."
-            else:
-                temp_dir = Path("data/temp_uploaded_vault")
-                if temp_dir.exists():
-                    shutil.rmtree(temp_dir)
-                temp_dir.mkdir(parents=True, exist_ok=True)
-
-                zip_files = [f for f in uploaded_files if f.name.endswith(".zip")]
-                md_files = [f for f in uploaded_files if f.name.endswith(".md")]
-
-                if zip_files:
-                    extracted_path = extract_vault_zip(zip_files[0], temp_dir)
-                    initialize_vault(extracted_path, f"Uploaded Vault ({zip_files[0].name})", api_key)
-                elif md_files:
-                    for f in md_files:
-                        note_path = temp_dir / f.name
-                        note_path.write_bytes(f.getbuffer())
-                    initialize_vault(temp_dir, f"Uploaded Vault ({len(md_files)} notes)", api_key)
-
-    # Auto-load demo vault if API key is present and not yet loaded
-    if api_key and st.session_state.vector_store is None:
-        initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
-
-    # Display clean status banner
-    if st.session_state.get("vault_load_error"):
-        st.error(st.session_state.vault_load_error)
-    elif st.session_state.get("vault_load_success"):
-        st.success(st.session_state.vault_load_success)
 
     # Vault Info Card
     st.markdown("---")
@@ -248,7 +189,7 @@ with st.sidebar:
             for fname, note_doc in st.session_state.loaded_notes.items():
                 st.markdown(f"- **{fname}** ({note_doc.char_count} chars)")
     else:
-        st.warning("No vault loaded yet. Enter your API key and click 'Load Demo Vault'.")
+        st.warning("No vault indexed yet.")
 
     # Starter Questions
     st.markdown("---")
@@ -279,6 +220,78 @@ with st.sidebar:
 st.markdown('<div class="main-header">🧠 Obsidian Vault RAG Knowledge Assistant</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Query your personal Obsidian knowledge base with verifiable source citations and exact passage highlighting. Powered by Google Gemini (Free).</div>', unsafe_allow_html=True)
 
+demo_vault_dir = Path("data/demo_vault")
+
+# Auto-load demo vault if API key is present and not yet loaded
+if api_key and st.session_state.vector_store is None:
+    initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
+
+# --- Main Page Vault Management Panel ---
+is_vault_loaded = st.session_state.vault_name is not None
+panel_title = f"📁 Knowledge Vault: **{st.session_state.vault_name}** ({len(st.session_state.loaded_notes)} notes indexed)" if is_vault_loaded else "📁 Select or Upload Knowledge Vault"
+
+with st.expander(panel_title, expanded=not is_vault_loaded):
+    tab_demo, tab_upload = st.tabs(["⚡ Preloaded Demo Vault", "📤 Upload Custom Notes / Vault (.md, .zip)"])
+    
+    with tab_demo:
+        st.markdown("**Preloaded Demo Vault Notes:** `RAG.md`, `LLMs.md`, `Embeddings.md`, `Vector_Databases.md`, `AI_Agents.md`")
+        col_d1, col_d2 = st.columns([1, 3])
+        with col_d1:
+            if st.button("🚀 Load Demo Vault", key="main_load_demo_btn", use_container_width=True):
+                if not api_key:
+                    st.session_state.vault_load_error = "Please provide an API Key in the sidebar to index the demo vault."
+                else:
+                    initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
+                    st.rerun()
+        with col_d2:
+            st.caption("Loads the curated 5-note AI engineering knowledge vault with full vectors and chunk metadata.")
+
+    with tab_upload:
+        st.markdown("Upload multiple `.md` markdown notes or a `.zip` archive exported from your Obsidian vault.")
+        uploaded_files = st.file_uploader(
+            "Drop your Obsidian Markdown (.md) notes or ZIP vault here:",
+            type=["zip", "md"],
+            accept_multiple_files=True,
+            help="Select one or multiple .md files or a zipped Obsidian vault directory.",
+            key="main_page_file_uploader"
+        )
+        
+        if uploaded_files:
+            col_u1, col_u2 = st.columns([1, 3])
+            with col_u1:
+                if st.button("📥 Process & Index Vault", key="main_process_upload_btn", use_container_width=True):
+                    if not api_key:
+                        st.session_state.vault_load_error = "Please enter an API Key in the sidebar to index the vault."
+                    else:
+                        temp_dir = Path("data/temp_uploaded_vault")
+                        if temp_dir.exists():
+                            shutil.rmtree(temp_dir)
+                        temp_dir.mkdir(parents=True, exist_ok=True)
+
+                        zip_files = [f for f in uploaded_files if f.name.endswith(".zip")]
+                        md_files = [f for f in uploaded_files if f.name.endswith(".md")]
+
+                        if zip_files:
+                            extracted_path = extract_vault_zip(zip_files[0], temp_dir)
+                            initialize_vault(extracted_path, f"Uploaded Vault ({zip_files[0].name})", api_key)
+                            st.rerun()
+                        elif md_files:
+                            for f in md_files:
+                                note_path = temp_dir / f.name
+                                note_path.write_bytes(f.getbuffer())
+                            initialize_vault(temp_dir, f"Uploaded Vault ({len(md_files)} notes)", api_key)
+                            st.rerun()
+            with col_u2:
+                st.caption(f"Ready to ingest {len(uploaded_files)} file(s) into ChromaDB.")
+
+    # Status notification inside the Vault Management panel
+    if st.session_state.get("vault_load_error"):
+        st.error(st.session_state.vault_load_error)
+    elif st.session_state.get("vault_load_success"):
+        st.success(st.session_state.vault_load_success)
+
+st.markdown("---")
+
 
 # Display Chat Conversation
 for idx, msg in enumerate(st.session_state.messages):
@@ -290,7 +303,6 @@ for idx, msg in enumerate(st.session_state.messages):
             st.markdown("##### 📚 Sources Used:")
             
             raw_chunks = msg.get("retrieved_chunks", [])
-            # Group all chunks by unique filename
             file_chunks_map = {}
             for chunk in raw_chunks:
                 if chunk.filename not in file_chunks_map:
@@ -336,7 +348,6 @@ if st.session_state.viewing_source:
             st.session_state.viewing_source = None
             st.rerun()
 
-    # Locate note and highlight all passages
     full_doc = st.session_state.loaded_notes.get(src_info["filename"])
     if full_doc:
         passages = src_info.get("passages", [])
@@ -364,7 +375,7 @@ if user_input:
     if not api_key:
         st.error("⚠️ Please provide a Gemini API Key in the sidebar to generate answers.")
     elif not st.session_state.vector_store:
-        st.error("⚠️ No vault loaded. Please click 'Load Demo Vault' in the sidebar or upload a custom vault.")
+        st.error("⚠️ No vault loaded. Please select or upload a vault in the Knowledge Vault panel above.")
     else:
         # 2. Append and render User message
         st.session_state.messages.append({"role": "user", "content": user_input})
@@ -375,11 +386,9 @@ if user_input:
         with st.chat_message("assistant"):
             with st.spinner("Searching Obsidian vault and reasoning with Gemini..."):
                 try:
-                    # Contextualize query for conversational follow-ups (e.g. pronouns like 'its', 'these')
                     search_query = contextualize_query_for_search(user_input, st.session_state.messages[:-1])
                     retrieved = st.session_state.vector_store.search(search_query, top_k=5)
                     
-                    # Generate Answer
                     client, model_name, _ = create_client_for_key(api_key)
                     rag_res: RAGResponse = generate_rag_answer(
                         query=user_input,
@@ -389,7 +398,6 @@ if user_input:
                         chat_history=st.session_state.messages
                     )
 
-                    # Save Assistant message to state
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": rag_res.answer,
