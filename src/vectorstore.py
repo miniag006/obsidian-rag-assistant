@@ -69,13 +69,11 @@ def deterministic_ngram_embed(text: str, dim: int = 768) -> List[float]:
         return vec
 
     for word in words:
-        # Word hash
         h = int(hashlib.md5(word.encode("utf-8")).hexdigest(), 16)
         idx = h % dim
         sign = 1.0 if (h >> 15) & 1 == 0 else -1.0
         vec[idx] += sign * 2.0
 
-        # Substring n-grams
         for n in (3, 4):
             for i in range(len(word) - n + 1):
                 gram = word[i : i + n]
@@ -84,7 +82,6 @@ def deterministic_ngram_embed(text: str, dim: int = 768) -> List[float]:
                 gsign = 1.0 if (gh >> 15) & 1 == 0 else -1.0
                 vec[gidx] += gsign * 0.8
 
-    # L2 normalize
     norm = math.sqrt(sum(x * x for x in vec))
     if norm > 0:
         vec = [x / norm for x in vec]
@@ -105,8 +102,6 @@ def get_gemini_embeddings(texts: List[str], api_key: str, model: str = "text-emb
 
     def embed_single(text: str) -> List[float]:
         cleaned_text = text.replace("\n", " ").strip() or " "
-        
-        # In embedContent, do NOT include redundant 'model' inside the body
         payload = {
             "content": {
                 "parts": [{"text": cleaned_text}]
@@ -121,7 +116,6 @@ def get_gemini_embeddings(texts: List[str], api_key: str, model: str = "text-emb
                 if emb:
                     return emb
 
-            # Try fallback model embedding-001
             fb_resp = requests.post(fallback_url, json=payload, timeout=20, verify=certifi.where())
             if fb_resp.status_code == 200:
                 data = fb_resp.json()
@@ -131,7 +125,6 @@ def get_gemini_embeddings(texts: List[str], api_key: str, model: str = "text-emb
         except Exception:
             pass
 
-        # Fallback to deterministic local embedding
         return deterministic_ngram_embed(text, dim=768)
 
     with ThreadPoolExecutor(max_workers=8) as executor:
@@ -211,7 +204,7 @@ class VaultVectorStore:
     def index_chunks(self, chunks: List[NoteChunk]) -> int:
         """
         Indexes a list of NoteChunks into the ChromaDB collection.
-        Safely generates embeddings first, then creates the collection fresh.
+        Safely generates embeddings first, then updates the collection without calling delete_collection.
         """
         if not chunks:
             return 0
@@ -225,16 +218,17 @@ class VaultVectorStore:
         ids = [c.chunk_id for c in chunks]
         metadatas = [c.to_metadata_dict() for c in chunks]
 
-        # Reset collection cleanly
+        # Reset records in collection safely without delete_collection
         try:
-            self.chroma_client.delete_collection(self.collection_name)
+            self.collection = self.chroma_client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"}
+            )
+            existing = self.collection.get()
+            if existing and existing.get("ids"):
+                self.collection.delete(ids=existing["ids"])
         except Exception:
             pass
-
-        self.collection = self.chroma_client.create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"}
-        )
 
         # Add to ChromaDB
         self.collection.add(

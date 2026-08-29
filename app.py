@@ -115,8 +115,12 @@ def create_client_for_key(key: str) -> tuple[OpenAI, str, str]:
 def initialize_vault(vault_path: Path, vault_label: str, active_api_key: str):
     """Loads markdown notes, chunks them, and builds ChromaDB vector embeddings."""
     if not active_api_key:
-        st.sidebar.error("⚠️ An API Key is required to index the vault.")
+        st.session_state.vault_load_error = "⚠️ An API Key is required to index the vault."
+        st.session_state.vault_load_success = None
         return
+
+    st.session_state.vault_load_error = None
+    st.session_state.vault_load_success = None
 
     with st.spinner(f"Ingesting and indexing '{vault_label}'..."):
         try:
@@ -140,10 +144,11 @@ def initialize_vault(vault_path: Path, vault_label: str, active_api_key: str):
             st.session_state.active_model = model_name
             st.session_state.active_embedding = embedding_model
             st.session_state.viewing_source = None
-
-            st.sidebar.success(f"Loaded {len(docs)} notes ({indexed_count} chunks)")
+            st.session_state.vault_load_success = f"Loaded {len(docs)} notes ({indexed_count} chunks)"
+            st.session_state.vault_load_error = None
         except Exception as e:
-            st.sidebar.error(f"Error loading vault: {str(e)}")
+            st.session_state.vault_load_error = f"Error loading vault: {str(e)}"
+            st.session_state.vault_load_success = None
 
 
 # Resolve API Key
@@ -182,7 +187,7 @@ with st.sidebar:
         st.caption("Preloaded notes: RAG, LLMs, Embeddings, Vector Databases, and AI Agents.")
         if st.button("🚀 Load Demo Vault", use_container_width=True):
             if not api_key:
-                st.error("Please provide an API Key above to index the demo vault.")
+                st.session_state.vault_load_error = "Please provide an API Key above to index the demo vault."
             else:
                 initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
 
@@ -197,7 +202,7 @@ with st.sidebar:
 
         if uploaded_file and st.button("📥 Process & Index Vault", use_container_width=True):
             if not api_key:
-                st.error("Please enter an API Key to index the vault.")
+                st.session_state.vault_load_error = "Please enter an API Key to index the vault."
             else:
                 temp_dir = Path("data/temp_uploaded_vault")
                 if temp_dir.exists():
@@ -215,6 +220,12 @@ with st.sidebar:
     # Auto-load demo vault if API key is present and not yet loaded
     if api_key and st.session_state.vector_store is None:
         initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
+
+    # Display clean status banner
+    if st.session_state.get("vault_load_error"):
+        st.error(st.session_state.vault_load_error)
+    elif st.session_state.get("vault_load_success"):
+        st.success(st.session_state.vault_load_success)
 
     # Vault Info Card
     st.markdown("---")
