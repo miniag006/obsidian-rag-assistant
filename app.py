@@ -485,47 +485,48 @@ if "current_prompt" in st.session_state and st.session_state.current_prompt:
     st.session_state.current_prompt = None
 
 if user_input:
-    # Reset active viewer so the view automatically focuses on the new question
+    # 1. Reset active viewer so the view automatically focuses on the new question
     st.session_state.active_viewer_msg_idx = None
     st.session_state.viewing_source = None
 
-    # 1. Validation checks
+    # 2. Validation checks
     if not api_key:
         st.error("⚠️ Please provide a Gemini API Key in the sidebar to generate answers.")
     elif not st.session_state.vector_store:
         st.error("⚠️ No vault loaded. Please click 'Load Demo Vault' in the sidebar or upload a custom vault.")
     else:
-        # 2. Append and render User message
+        # 3. Append User message and trigger immediate rerun to render question + scroll immediately
         st.session_state.messages.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
+        st.rerun()
 
-        # 3. Retrieve chunks, generate answer, and rerun with stable widget keys
-        with st.chat_message("assistant"):
-            with st.spinner("Searching Obsidian vault and reasoning with Gemini..."):
-                try:
-                    search_query = contextualize_query_for_search(user_input, st.session_state.messages[:-1])
-                    retrieved = st.session_state.vector_store.search(search_query, top_k=6)
-                    
-                    client, model_name, _ = create_client_for_key(api_key)
-                    rag_res: RAGResponse = generate_rag_answer(
-                        query=user_input,
-                        retrieved_chunks=retrieved,
-                        openai_client=client,
-                        api_key=api_key,
-                        model_name=model_name,
-                        chat_history=st.session_state.messages
-                    )
+# Execute pending Assistant response generation
+if st.session_state.messages and st.session_state.messages[-1].get("role") == "user":
+    pending_user_msg = st.session_state.messages[-1]["content"]
+    with st.chat_message("assistant"):
+        with st.spinner("Searching Obsidian vault and reasoning with Gemini..."):
+            try:
+                search_query = contextualize_query_for_search(pending_user_msg, st.session_state.messages[:-1])
+                retrieved = st.session_state.vector_store.search(search_query, top_k=6)
+                
+                client, model_name, _ = create_client_for_key(api_key)
+                rag_res: RAGResponse = generate_rag_answer(
+                    query=pending_user_msg,
+                    retrieved_chunks=retrieved,
+                    openai_client=client,
+                    api_key=api_key,
+                    model_name=model_name,
+                    chat_history=st.session_state.messages[:-1]
+                )
 
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": rag_res.answer,
-                        "sources": rag_res.sources,
-                        "retrieved_chunks": rag_res.retrieved_chunks
-                    })
-                    st.rerun()
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": rag_res.answer,
+                    "sources": rag_res.sources,
+                    "retrieved_chunks": rag_res.retrieved_chunks
+                })
+                st.rerun()
 
-                except Exception as e:
-                    err_msg = f"❌ An error occurred: {str(e)}"
-                    st.session_state.messages.append({"role": "assistant", "content": err_msg})
-                    st.rerun()
+            except Exception as e:
+                err_msg = f"❌ An error occurred: {str(e)}"
+                st.session_state.messages.append({"role": "assistant", "content": err_msg})
+                st.rerun()
