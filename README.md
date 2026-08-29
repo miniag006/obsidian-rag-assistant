@@ -162,7 +162,7 @@ Add your OpenAI API Key inside `.env`:
 ```env
 OPENAI_API_KEY=sk-your-actual-api-key-here
 ```
-*(Alternatively, you can enter the API key directly in the Streamlit sidebar input field).*
+> **Security Note:** The API key is a server-side secret managed via environment variables / `.env` (or hosting platform secrets on Streamlit Cloud) and is **never** asked from or exposed to the end user in the UI.
 
 ### 3. Launch the Application
 
@@ -174,15 +174,15 @@ Open your browser to `http://localhost:8501`.
 
 ---
 
-## 💡 Demo Experience
+## 💡 Evaluator Demo Experience
 
-1. **Open the App**: Notice the clean, intuitive interface.
-2. **Click "Load Demo Vault"**: Instantly parses all 5 notes, breaks them into 40 section chunks, and generates vector embeddings.
-3. **Ask a Question**: E.g., *"What is RAG and why is it useful?"*
-4. **Inspect the Answer**: The LLM synthesizes a concise, factually grounded answer.
-5. **Click a Source Note**: Under the answer, click `📄 RAG.md`.
-6. **Verify Highlighted Passage**: The full note opens in the viewer with the exact passage used to answer your question highlighted in yellow.
-7. **Test Out-of-Vault Fallback**: Ask *"What is the recipe for baking chocolate cookies?"*. Notice the assistant avoids hallucination and clearly indicates the knowledge is missing.
+1. **Open the App**: The Preloaded Demo Vault is automatically indexed and ready immediately on startup.
+2. **Ask a Question**: E.g., *"What is RAG and why is it useful?"* (or click any of the quick starter questions).
+3. **Inspect the Answer**: The LLM synthesizes a concise, factually grounded answer.
+4. **Click a Source Note**: Under the answer, click `📄 RAG.md`.
+5. **Verify Highlighted Passage**: The full note opens in the viewer with the exact passage used to answer your question highlighted in yellow.
+6. **Test Out-of-Vault Fallback**: Ask *"What is the recipe for baking chocolate cookies?"*. Notice the assistant avoids hallucination and clearly indicates the knowledge is missing.
+7. **Custom Vault (Optional)**: Switch to "Upload Custom Vault" in the sidebar to upload a `.zip` archive or `.md` notes.
 
 ---
 

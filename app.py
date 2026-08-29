@@ -17,8 +17,16 @@ from src.vectorstore import VaultVectorStore, RetrievedChunk
 from src.rag import generate_rag_answer, RAGResponse, FALLBACK_MESSAGE
 from src.utils import highlight_passage_in_markdown, extract_vault_zip
 
-# Load environment variables from .env if present
+# Load environment variables from .env if present (for local development)
 load_dotenv()
+
+# Helper to retrieve the server-side OpenAI API key from env or Streamlit secrets
+def get_openai_api_key() -> str:
+    # Check Streamlit secrets first (if deployed on Streamlit Cloud), then standard os.environ
+    if hasattr(st, "secrets") and "OPENAI_API_KEY" in st.secrets:
+        return st.secrets["OPENAI_API_KEY"].strip()
+    return os.getenv("OPENAI_API_KEY", "").strip()
+
 
 # Streamlit Page Config
 st.set_page_config(
@@ -47,25 +55,6 @@ st.markdown("""
         border-radius: 8px;
         padding: 12px 16px;
         margin-bottom: 10px;
-    }
-    .source-badge {
-        display: inline-block;
-        background: #e0e7ff;
-        color: #3730a3;
-        font-size: 0.8rem;
-        font-weight: 600;
-        padding: 2px 8px;
-        border-radius: 4px;
-        margin-right: 6px;
-    }
-    .score-badge {
-        display: inline-block;
-        background: #dcfce7;
-        color: #166534;
-        font-size: 0.8rem;
-        font-weight: 600;
-        padding: 2px 8px;
-        border-radius: 4px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -119,21 +108,27 @@ def initialize_vault(vault_path: Path, vault_label: str, api_key: str):
             st.sidebar.error(f"Error loading vault: {str(e)}")
 
 
+# Retrieve server-side API Key
+server_api_key = get_openai_api_key()
+
+# Check server configuration: if missing, display administrator error banner
+if not server_api_key:
+    st.error(
+        "⚠️ **Application Configuration Error**: Server API key is missing.\n\n"
+        "The application requires `OPENAI_API_KEY` to be configured as an environment variable "
+        "or in the deployment secrets (e.g., in `.env` for local development or Streamlit secrets for deployment)."
+    )
+    st.stop()
+
+# Auto-initialize the demo vault on first startup
+demo_vault_dir = Path("data/demo_vault")
+if st.session_state.vector_store is None:
+    initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", server_api_key)
+
+
 # --- Sidebar UI ---
 with st.sidebar:
     st.title("⚙️ Vault Settings")
-
-    # API Key Handling
-    env_api_key = os.getenv("OPENAI_API_KEY", "")
-    api_key_input = st.text_input(
-        "OpenAI API Key",
-        value=env_api_key,
-        type="password",
-        help="Reads from OPENAI_API_KEY environment variable or enter manually here."
-    )
-    api_key = api_key_input.strip() or env_api_key
-
-    st.markdown("---")
     st.subheader("📚 Knowledge Vault")
 
     vault_source = st.radio(
@@ -142,15 +137,10 @@ with st.sidebar:
         index=0
     )
 
-    demo_vault_dir = Path("data/demo_vault")
-
     if vault_source == "Preloaded Demo Vault":
-        st.caption("Realistic notes: RAG, LLMs, Embeddings, Vector Databases, and AI Agents.")
-        if st.button("🚀 Load Demo Vault", use_container_width=True):
-            if not api_key:
-                st.error("Please provide an OpenAI API Key above to generate embeddings.")
-            else:
-                initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
+        st.caption("Preloaded notes: RAG, LLMs, Embeddings, Vector Databases, and AI Agents.")
+        if st.button("🔄 Reload Demo Vault", use_container_width=True):
+            initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", server_api_key)
 
     elif vault_source == "Upload Custom Vault":
         st.caption("Upload a `.zip` archive containing your Obsidian `.md` notes, or individual `.md` files.")
@@ -162,21 +152,18 @@ with st.sidebar:
         )
 
         if uploaded_file and st.button("📥 Process & Index Vault", use_container_width=True):
-            if not api_key:
-                st.error("Please provide an OpenAI API Key to index the vault.")
-            else:
-                temp_dir = Path("data/temp_uploaded_vault")
-                if temp_dir.exists():
-                    shutil.rmtree(temp_dir)
-                temp_dir.mkdir(parents=True, exist_ok=True)
+            temp_dir = Path("data/temp_uploaded_vault")
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
+            temp_dir.mkdir(parents=True, exist_ok=True)
 
-                if uploaded_file.name.endswith(".zip"):
-                    extracted_path = extract_vault_zip(uploaded_file, temp_dir)
-                    initialize_vault(extracted_path, f"Uploaded Vault ({uploaded_file.name})", api_key)
-                elif uploaded_file.name.endswith(".md"):
-                    note_path = temp_dir / uploaded_file.name
-                    note_path.write_bytes(uploaded_file.getbuffer())
-                    initialize_vault(temp_dir, f"Uploaded Note ({uploaded_file.name})", api_key)
+            if uploaded_file.name.endswith(".zip"):
+                extracted_path = extract_vault_zip(uploaded_file, temp_dir)
+                initialize_vault(extracted_path, f"Uploaded Vault ({uploaded_file.name})", server_api_key)
+            elif uploaded_file.name.endswith(".md"):
+                note_path = temp_dir / uploaded_file.name
+                note_path.write_bytes(uploaded_file.getbuffer())
+                initialize_vault(temp_dir, f"Uploaded Note ({uploaded_file.name})", server_api_key)
 
     # Vault Info Card
     st.markdown("---")
@@ -191,7 +178,7 @@ with st.sidebar:
             for fname, note_doc in st.session_state.loaded_notes.items():
                 st.markdown(f"- **{fname}** ({note_doc.char_count} chars)")
     else:
-        st.warning("No vault loaded yet. Click 'Load Demo Vault' to get started immediately.")
+        st.warning("No vault loaded yet.")
 
     # Starter Questions
     st.markdown("---")
@@ -302,10 +289,8 @@ if "current_prompt" in st.session_state and st.session_state.current_prompt:
 
 if user_input:
     # 1. Validation checks
-    if not api_key:
-        st.error("⚠️ Please enter an OpenAI API Key in the sidebar to use the assistant.")
-    elif not st.session_state.vector_store:
-        st.error("⚠️ No vault loaded. Please click 'Load Demo Vault' in the sidebar or upload a custom vault.")
+    if not st.session_state.vector_store:
+        st.error("⚠️ No vault loaded. Please reload the demo vault or upload a custom vault.")
     else:
         # 2. Append and render User message
         st.session_state.messages.append({"role": "user", "content": user_input})
@@ -320,7 +305,7 @@ if user_input:
                     retrieved = st.session_state.vector_store.search(user_input, top_k=4)
                     
                     # Generate Answer
-                    openai_client = OpenAI(api_key=api_key)
+                    openai_client = OpenAI(api_key=server_api_key)
                     rag_res: RAGResponse = generate_rag_answer(
                         query=user_input,
                         retrieved_chunks=retrieved,
