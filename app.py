@@ -240,9 +240,14 @@ with st.sidebar:
                     initialize_vault(temp_dir, f"Uploaded Vault ({len(md_files)} notes)", api_key)
                     st.rerun()
 
-    # Auto-load demo vault if API key is present and not yet loaded
+    # Auto-load active vault if API key is present and not yet loaded
     if api_key and st.session_state.vector_store is None:
-        initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
+        temp_dir = Path("data/temp_uploaded_vault")
+        if temp_dir.exists() and list(temp_dir.glob("*.md")):
+            md_count = len(list(temp_dir.glob("*.md")))
+            initialize_vault(temp_dir, f"Uploaded Vault ({md_count} notes)", api_key)
+        else:
+            initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
 
     # Status banner
     if st.session_state.get("vault_load_error"):
