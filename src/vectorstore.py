@@ -3,12 +3,12 @@ ChromaDB Vector Store & Embeddings Manager
 Handles chunk indexing, embedding generation via Gemini API / OpenAI API, and semantic similarity search.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import os
 from typing import List, Optional, Tuple
 import certifi
 import chromadb
-from chromadb.config import Settings
 from openai import OpenAI
 import requests
 
@@ -58,34 +58,46 @@ def get_default_client(api_key: Optional[str] = None) -> Tuple[OpenAI, str]:
     return client, embedding_model
 
 
-def get_gemini_embeddings(texts: List[str], api_key: str, model: str = "text-embedding-004", batch_size: int = 32) -> List[List[float]]:
+def get_gemini_embeddings(texts: List[str], api_key: str, model: str = "text-embedding-004") -> List[List[float]]:
     """
-    Fetches embeddings from Google Gemini API using requests with certifi CA bundle.
-    Endpoint: https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents
+    Fetches embeddings from Google Gemini API concurrently using standard requests + certifi.
+    Uses embedContent with fallback to embedding-001 for high reliability.
     """
-    embeddings: List[List[float]] = []
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents?key={api_key}"
+    if not texts:
+        return []
 
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
-        requests_payload = []
-        for text in batch:
-            requests_payload.append({
-                "model": f"models/{model}",
-                "content": {"parts": [{"text": text.replace("\n", " ")}]}
-            })
+    clean_key = api_key.strip()
+    primary_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent?key={clean_key}"
+    fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={clean_key}"
 
-        payload = {"requests": requests_payload}
+    def embed_single(text: str) -> List[float]:
+        cleaned_text = text.replace("\n", " ").strip() or " "
+        payload = {
+            "model": f"models/{model}",
+            "content": {"parts": [{"text": cleaned_text}]}
+        }
         try:
-            resp = requests.post(url, json=payload, timeout=30, verify=certifi.where())
-            if resp.status_code != 200:
-                raise RuntimeError(f"Gemini API Error ({resp.status_code}): {resp.text}")
+            resp = requests.post(primary_url, json=payload, timeout=25, verify=certifi.where())
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("embedding", {}).get("values", [])
             
-            data = resp.json()
-            for emb_item in data.get("embeddings", []):
-                embeddings.append(emb_item.get("values", []))
+            # If primary model returned error, attempt fallback model
+            fb_payload = {
+                "model": "models/embedding-001",
+                "content": {"parts": [{"text": cleaned_text}]}
+            }
+            fb_resp = requests.post(fallback_url, json=fb_payload, timeout=25, verify=certifi.where())
+            if fb_resp.status_code == 200:
+                data = fb_resp.json()
+                return data.get("embedding", {}).get("values", [])
+
+            raise RuntimeError(f"Gemini API Error ({resp.status_code}): {resp.text}")
         except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"Failed to connect to Gemini Embedding API: {str(e)}")
+            raise RuntimeError(f"Network error connecting to Gemini Embedding API: {str(e)}")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        embeddings = list(executor.map(embed_single, texts))
 
     return embeddings
 
