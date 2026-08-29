@@ -306,9 +306,13 @@ if not st.session_state.messages:
 
 
 # Display Chat Conversation
+total_msgs = len(st.session_state.messages)
+latest_user_idx = max([i for i, m in enumerate(st.session_state.messages) if m.get("role") == "user"], default=-1)
+
 for idx, msg in enumerate(st.session_state.messages):
+    anchor_html = '<div id="latest-user-question" style="scroll-margin-top: 80px;"></div>' if idx == latest_user_idx else ""
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+        st.markdown(anchor_html + msg["content"], unsafe_allow_html=True)
         
         # Display Deduplicated Source Buttons for Assistant Responses
         if msg["role"] == "assistant" and "sources" in msg and msg["sources"]:
@@ -402,19 +406,29 @@ for idx, msg in enumerate(st.session_state.messages):
                 st.markdown("---")
 
 
-# Auto-scroll to latest turn ONLY when NOT inspecting a source document
+# Auto-scroll directly to the latest question turn ONLY when NOT inspecting a source document
 if st.session_state.messages and st.session_state.get("active_viewer_msg_idx") is None:
     st.markdown('<div id="latest-turn-anchor"></div>', unsafe_allow_html=True)
     st.components.v1.html("""
     <script>
-    setTimeout(function() {
+    function scrollToLatestQuestion() {
         try {
-            const anchor = window.parent.document.getElementById('latest-turn-anchor');
-            if (anchor) {
-                anchor.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            const doc = window.parent.document;
+            const target = doc.getElementById('latest-user-question') || doc.getElementById('latest-turn-anchor');
+            if (target) {
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } else {
+                const container = doc.querySelector('[data-testid="stAppViewContainer"]') || doc.querySelector('section.main') || doc.documentElement;
+                if (container) {
+                    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+                }
             }
         } catch (e) {}
-    }, 150);
+    }
+    setTimeout(scrollToLatestQuestion, 50);
+    setTimeout(scrollToLatestQuestion, 150);
+    setTimeout(scrollToLatestQuestion, 350);
+    setTimeout(scrollToLatestQuestion, 600);
     </script>
     """, height=0)
 
