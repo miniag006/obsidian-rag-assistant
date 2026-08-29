@@ -187,7 +187,7 @@ with st.sidebar:
     # CHANGE 2: Make vault upload option prominent and noticeable
     vault_source = st.radio(
         "Choose Vault Source:",
-        options=["⚡ Preloaded Demo Vault", "📤 Upload Your Own Vault (.md / .zip)"],
+        options=["⚡ Preloaded Demo Vault", "📤 Upload Your Own Vault (.md files or .zip)"],
         index=0
     )
 
@@ -202,19 +202,19 @@ with st.sidebar:
                 initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
                 st.rerun()
 
-    elif vault_source == "📤 Upload Your Own Vault (.md / .zip)":
+    elif vault_source == "📤 Upload Your Own Vault (.md files or .zip)":
         st.markdown("""
         <div class="upload-highlight-box">
-            <b>📂 Upload Your Obsidian Notes</b><br>
-            <span style="font-size: 0.85rem; color: #94a3b8;">Select multiple <code>.md</code> note files or a <code>.zip</code> archive of your vault:</span>
+            <b>📂 Upload Your Obsidian Vault</b><br>
+            <span style="font-size: 0.85rem; color: #94a3b8;">Upload individual Markdown (<code>.md</code>) files or a <code>.zip</code> containing your Obsidian Markdown notes.</span>
         </div>
         """, unsafe_allow_html=True)
         
         uploaded_files = st.file_uploader(
-            "Select Markdown notes (.md) or Vault (.zip)",
+            "Select individual .md files or a .zip containing .md notes",
             type=["zip", "md"],
             accept_multiple_files=True,
-            help="Select one or multiple .md files or a zipped Obsidian vault."
+            help="Select one or multiple .md files or a zipped Obsidian vault directory."
         )
 
         if uploaded_files and st.button("📥 Process & Index Uploaded Vault", use_container_width=True):
@@ -268,10 +268,9 @@ with st.sidebar:
     else:
         st.warning("No vault loaded yet. Enter your API key and click 'Load Demo Vault'.")
 
-    # CHANGE 4: Clarify Example Questions label
+    # CHANGE 1: Single heading "💡 Example Questions for Demo Vault"
     st.markdown("---")
-    st.subheader("💡 Example Questions")
-    st.caption("Example questions for Demo Vault")
+    st.subheader("💡 Example Questions for Demo Vault")
     
     example_prompts = [
         "What is RAG and why is it useful?",
@@ -381,15 +380,20 @@ for idx, msg in enumerate(st.session_state.messages):
                     )
                     st.markdown(highlighted_content, unsafe_allow_html=True)
                     
-                    # CHANGE 6: Auto-scroll directly to the first retrieved passage in the viewer
+                    # Auto-scroll directly and smoothly to the first retrieved passage in the viewer
                     st.components.v1.html("""
                     <script>
-                    setTimeout(function() {
-                        const target = window.parent.document.getElementById('first-retrieved-passage');
-                        if (target) {
-                            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        }
-                    }, 200);
+                    function scrollToFirstPassage() {
+                        try {
+                            const target = window.parent.document.getElementById('first-retrieved-passage');
+                            if (target) {
+                                target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }
+                        } catch (e) {}
+                    }
+                    setTimeout(scrollToFirstPassage, 60);
+                    setTimeout(scrollToFirstPassage, 180);
+                    setTimeout(scrollToFirstPassage, 400);
                     </script>
                     """, height=0)
                 else:
@@ -398,16 +402,18 @@ for idx, msg in enumerate(st.session_state.messages):
                 st.markdown("---")
 
 
-# CHANGE 5: Anchor and script to auto-scroll smoothly to the latest question turn
-st.markdown('<div id="latest-turn-anchor"></div>', unsafe_allow_html=True)
-if st.session_state.messages:
+# Auto-scroll to latest turn ONLY when NOT inspecting a source document
+if st.session_state.messages and st.session_state.get("active_viewer_msg_idx") is None:
+    st.markdown('<div id="latest-turn-anchor"></div>', unsafe_allow_html=True)
     st.components.v1.html("""
     <script>
     setTimeout(function() {
-        const anchor = window.parent.document.getElementById('latest-turn-anchor');
-        if (anchor) {
-            anchor.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }
+        try {
+            const anchor = window.parent.document.getElementById('latest-turn-anchor');
+            if (anchor) {
+                anchor.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            }
+        } catch (e) {}
     }, 150);
     </script>
     """, height=0)
