@@ -55,14 +55,14 @@ def split_text_into_sections(markdown_text: str) -> List[tuple[str, str, int, in
     if not matches:
         return [("General", markdown_text.strip(), 0, len(markdown_text))]
 
-    sections = []
+    raw_sections = []
     
     # Text before the first header (if any)
     first_match = matches[0]
     if first_match.start() > 0:
         pre_text = markdown_text[:first_match.start()].strip()
         if pre_text:
-            sections.append(("Introduction", pre_text, 0, first_match.start()))
+            raw_sections.append(("Introduction", pre_text, 0, first_match.start()))
 
     for i, match in enumerate(matches):
         heading_title = match.group(2).strip()
@@ -71,9 +71,23 @@ def split_text_into_sections(markdown_text: str) -> List[tuple[str, str, int, in
         
         section_text = markdown_text[start_idx:end_idx].strip()
         if section_text:
-            sections.append((heading_title, section_text, start_idx, end_idx))
+            raw_sections.append((heading_title, section_text, start_idx, end_idx))
 
-    return sections
+    # Merge very small header fragments (< 120 chars) with adjacent section content
+    merged = []
+    for h_title, sec_text, s_idx, e_idx in raw_sections:
+        if merged and len(sec_text) < 120 and not sec_text.startswith("# "):
+            prev_h, prev_txt, prev_s, _ = merged.pop()
+            combined_text = prev_txt + "\n\n" + sec_text
+            merged.append((prev_h, combined_text, prev_s, e_idx))
+        elif merged and len(merged[-1][1]) < 120:
+            prev_h, prev_txt, prev_s, _ = merged.pop()
+            combined_text = prev_txt + "\n\n" + sec_text
+            merged.append((h_title, combined_text, prev_s, e_idx))
+        else:
+            merged.append((h_title, sec_text, s_idx, e_idx))
+
+    return merged
 
 
 def chunk_document(

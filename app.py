@@ -505,7 +505,7 @@ if user_input:
             with st.spinner("Searching Obsidian vault and reasoning with Gemini..."):
                 try:
                     search_query = contextualize_query_for_search(user_input, st.session_state.messages[:-1])
-                    retrieved = st.session_state.vector_store.search(search_query, top_k=5)
+                    retrieved = st.session_state.vector_store.search(search_query, top_k=6)
                     
                     client, model_name, _ = create_client_for_key(api_key)
                     rag_res: RAGResponse = generate_rag_answer(
