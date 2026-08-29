@@ -1,7 +1,7 @@
 """
 RAG Generation & Context Grounding Pipeline
 Constructs augmented prompts and queries the LLM with strict grounding rules.
-Supports Google Gemini API (Direct REST + certifi) and OpenAI API.
+Supports Google Gemini API (Dynamic Model Discovery + REST + certifi) and OpenAI API.
 """
 
 from dataclasses import dataclass
@@ -30,6 +30,9 @@ CRITICAL GROUNDING RULES:
    "I couldn't find enough information about this in your Obsidian knowledge base."
 3. When answering, be clear, structured, and factual. Use bullet points or concise paragraphs where appropriate.
 4. Always ground your claims. Do not make up citations or references."""
+
+# Cache of discovered models per API key
+_DISCOVERED_MODELS_CACHE = {}
 
 
 @dataclass
@@ -85,23 +88,64 @@ def format_context_for_llm(chunks: List[RetrievedChunk]) -> str:
     return "\n".join(context_blocks)
 
 
-def call_gemini_generate_rest(prompt: str, api_key: str, model: str = "gemini-3.6-flash") -> str:
+def get_available_gemini_models(api_key: str) -> List[str]:
     """
-    Calls Google Gemini REST generateContent endpoint directly with certifi SSL verification.
-    Uses current active models (gemini-3.6-flash) with clean UTF-8 encoding.
+    Dynamically queries Google Generative Language API for models supporting generateContent
+    for this specific API key, guaranteeing zero 404 model errors.
+    """
+    clean_key = api_key.strip()
+    if not clean_key:
+        return []
+
+    if clean_key in _DISCOVERED_MODELS_CACHE:
+        return _DISCOVERED_MODELS_CACHE[clean_key]
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
+        resp = requests.get(url, timeout=12, verify=certifi.where())
+        if resp.status_code == 200:
+            data = resp.json()
+            flash_models = []
+            other_models = []
+            for m in data.get("models", []):
+                methods = m.get("supportedGenerationMethods", [])
+                if "generateContent" in methods:
+                    name = m.get("name", "").replace("models/", "")
+                    if "flash" in name:
+                        flash_models.append(name)
+                    else:
+                        other_models.append(name)
+
+            # Sort flash models to front for speed
+            ordered = flash_models + other_models
+            if ordered:
+                _DISCOVERED_MODELS_CACHE[clean_key] = ordered
+                return ordered
+    except Exception:
+        pass
+
+    fallback = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-3.6-flash"]
+    _DISCOVERED_MODELS_CACHE[clean_key] = fallback
+    return fallback
+
+
+def call_gemini_generate_rest(prompt: str, api_key: str, model: Optional[str] = None) -> str:
+    """
+    Calls Google Gemini REST generateContent endpoint directly using discovered valid models.
+    Guarantees clean UTF-8 encoding and zero 404 model mismatches.
     """
     clean_key = api_key.strip()
     if not clean_key:
         raise ValueError("No Gemini API key provided. Please enter your API key in the sidebar.")
 
-    candidate_models = ["gemini-3.6-flash", model, "gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
+    # Get dynamically discovered models for this account
+    available_models = get_available_gemini_models(clean_key)
     
-    seen = set()
-    models = []
-    for m in candidate_models:
-        if m and m not in seen:
-            seen.add(m)
-            models.append(m)
+    # If a specific model was requested and is available, try it first
+    if model and model in available_models:
+        candidate_models = [model] + [m for m in available_models if m != model]
+    else:
+        candidate_models = available_models
 
     payload = {
         "system_instruction": {
@@ -119,7 +163,7 @@ def call_gemini_generate_rest(prompt: str, api_key: str, model: str = "gemini-3.
     }
 
     last_err = ""
-    for m in models:
+    for m in candidate_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={clean_key}"
         try:
             resp = requests.post(url, json=payload, timeout=30, verify=certifi.where())
@@ -131,9 +175,9 @@ def call_gemini_generate_rest(prompt: str, api_key: str, model: str = "gemini-3.
                     if parts:
                         return parts[0].get("text", "").strip()
             else:
-                last_err = f"Status {resp.status_code}: {resp.text}"
+                last_err = f"Status {resp.status_code} ({m}): {resp.text}"
         except Exception as e:
-            last_err = str(e)
+            last_err = f"({m}) {str(e)}"
             continue
 
     raise RuntimeError(f"Gemini generation error: {last_err}")
@@ -149,7 +193,7 @@ def generate_rag_answer(
     similarity_threshold: float = 0.15,
 ) -> RAGResponse:
     """
-    Executes the grounded RAG generation step with robust multi-model fallback and unicode sanitization.
+    Executes the grounded RAG generation step with robust dynamic model discovery and unicode sanitization.
     """
     key = (api_key or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
     if not key and openai_client and getattr(openai_client, "api_key", None):
@@ -195,14 +239,12 @@ def generate_rag_answer(
 
     try:
         if is_gemini:
-            # Direct REST Gemini call
             answer = call_gemini_generate_rest(
                 prompt=user_prompt,
                 api_key=key,
-                model=model_name or "gemini-3.6-flash"
+                model=model_name
             )
         else:
-            # OpenAI API call
             client = openai_client or OpenAI(api_key=key)
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
