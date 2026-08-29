@@ -17,21 +17,19 @@ from src.vectorstore import VaultVectorStore, RetrievedChunk
 from src.rag import generate_rag_answer, RAGResponse, FALLBACK_MESSAGE
 from src.utils import highlight_passage_in_markdown, extract_vault_zip
 
-# Load environment variables from .env if present (for local development)
+# Load environment variables from .env if present
 load_dotenv()
 
-# Helper to retrieve the server-side OpenAI API key from env or Streamlit secrets
-def get_openai_api_key() -> str:
-    # Check Streamlit secrets first (if deployed on Streamlit Cloud)
+
+def get_default_api_key() -> str:
+    """Safely retrieves API key from Streamlit secrets or environment variables."""
     try:
         if hasattr(st, "secrets") and "OPENAI_API_KEY" in st.secrets:
             key = st.secrets["OPENAI_API_KEY"]
             if key:
                 return str(key).strip()
     except Exception:
-        # secrets.toml does not exist locally; fall through to .env / os.environ
         pass
-
     return os.getenv("OPENAI_API_KEY", "").strip()
 
 
@@ -87,8 +85,12 @@ if "viewing_source" not in st.session_state:
     st.session_state.viewing_source = None  # Dict of chunk details to display in viewer
 
 
-def initialize_vault(vault_path: Path, vault_label: str, api_key: str):
+def initialize_vault(vault_path: Path, vault_label: str, active_api_key: str):
     """Loads markdown notes, chunks them, and builds ChromaDB vector embeddings."""
+    if not active_api_key:
+        st.sidebar.error("⚠️ OpenAI API Key is required to index the vault.")
+        return
+
     with st.spinner(f"Ingesting and indexing '{vault_label}'..."):
         try:
             # 1. Load documents
@@ -99,7 +101,7 @@ def initialize_vault(vault_path: Path, vault_label: str, api_key: str):
             chunks = chunk_vault(docs)
 
             # 3. Create OpenAI Client & Vector Store
-            openai_client = OpenAI(api_key=api_key)
+            openai_client = OpenAI(api_key=active_api_key)
             vector_store = VaultVectorStore(openai_client=openai_client)
             indexed_count = vector_store.index_chunks(chunks)
 
@@ -115,27 +117,29 @@ def initialize_vault(vault_path: Path, vault_label: str, api_key: str):
             st.sidebar.error(f"Error loading vault: {str(e)}")
 
 
-# Retrieve server-side API Key
-server_api_key = get_openai_api_key()
-
-# Check server configuration: if missing, display administrator error banner
-if not server_api_key:
-    st.error(
-        "⚠️ **Application Configuration Error**: Server API key is missing.\n\n"
-        "The application requires `OPENAI_API_KEY` to be configured as an environment variable "
-        "or in the deployment secrets (e.g., in `.env` for local development or Streamlit secrets for deployment)."
-    )
-    st.stop()
-
-# Auto-initialize the demo vault on first startup
-demo_vault_dir = Path("data/demo_vault")
-if st.session_state.vector_store is None:
-    initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", server_api_key)
-
+# Resolve API Key
+default_key = get_default_api_key()
 
 # --- Sidebar UI ---
 with st.sidebar:
     st.title("⚙️ Vault Settings")
+
+    if default_key:
+        st.success("🔒 **API Key:** Configured via Server Environment")
+        api_key = default_key
+    else:
+        st.markdown("🔑 **OpenAI API Key**")
+        user_key_input = st.text_input(
+            "Enter OpenAI API Key",
+            type="password",
+            placeholder="sk-...",
+            help="Your key is kept in memory during your session and never logged or committed."
+        )
+        api_key = user_key_input.strip()
+        if not api_key:
+            st.caption("💡 Enter your OpenAI API key above or configure `OPENAI_API_KEY` in `.env`.")
+
+    st.markdown("---")
     st.subheader("📚 Knowledge Vault")
 
     vault_source = st.radio(
@@ -144,10 +148,15 @@ with st.sidebar:
         index=0
     )
 
+    demo_vault_dir = Path("data/demo_vault")
+
     if vault_source == "Preloaded Demo Vault":
-        st.caption("Preloaded notes: RAG, LLMs, Embeddings, Vector Databases, and AI Agents.")
-        if st.button("🔄 Reload Demo Vault", use_container_width=True):
-            initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", server_api_key)
+        st.caption("Realistic notes: RAG, LLMs, Embeddings, Vector Databases, and AI Agents.")
+        if st.button("🚀 Load Demo Vault", use_container_width=True):
+            if not api_key:
+                st.error("Please enter an OpenAI API Key above to index the demo vault.")
+            else:
+                initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
 
     elif vault_source == "Upload Custom Vault":
         st.caption("Upload a `.zip` archive containing your Obsidian `.md` notes, or individual `.md` files.")
@@ -159,18 +168,25 @@ with st.sidebar:
         )
 
         if uploaded_file and st.button("📥 Process & Index Vault", use_container_width=True):
-            temp_dir = Path("data/temp_uploaded_vault")
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir)
-            temp_dir.mkdir(parents=True, exist_ok=True)
+            if not api_key:
+                st.error("Please enter an OpenAI API Key to index the vault.")
+            else:
+                temp_dir = Path("data/temp_uploaded_vault")
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir)
+                temp_dir.mkdir(parents=True, exist_ok=True)
 
-            if uploaded_file.name.endswith(".zip"):
-                extracted_path = extract_vault_zip(uploaded_file, temp_dir)
-                initialize_vault(extracted_path, f"Uploaded Vault ({uploaded_file.name})", server_api_key)
-            elif uploaded_file.name.endswith(".md"):
-                note_path = temp_dir / uploaded_file.name
-                note_path.write_bytes(uploaded_file.getbuffer())
-                initialize_vault(temp_dir, f"Uploaded Note ({uploaded_file.name})", server_api_key)
+                if uploaded_file.name.endswith(".zip"):
+                    extracted_path = extract_vault_zip(uploaded_file, temp_dir)
+                    initialize_vault(extracted_path, f"Uploaded Vault ({uploaded_file.name})", api_key)
+                elif uploaded_file.name.endswith(".md"):
+                    note_path = temp_dir / uploaded_file.name
+                    note_path.write_bytes(uploaded_file.getbuffer())
+                    initialize_vault(temp_dir, f"Uploaded Note ({uploaded_file.name})", api_key)
+
+    # Auto-load demo vault if API key is present and not yet loaded
+    if api_key and st.session_state.vector_store is None:
+        initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
 
     # Vault Info Card
     st.markdown("---")
@@ -185,7 +201,7 @@ with st.sidebar:
             for fname, note_doc in st.session_state.loaded_notes.items():
                 st.markdown(f"- **{fname}** ({note_doc.char_count} chars)")
     else:
-        st.warning("No vault loaded yet.")
+        st.warning("No vault loaded yet. Enter your API key and click 'Load Demo Vault'.")
 
     # Starter Questions
     st.markdown("---")
@@ -296,8 +312,10 @@ if "current_prompt" in st.session_state and st.session_state.current_prompt:
 
 if user_input:
     # 1. Validation checks
-    if not st.session_state.vector_store:
-        st.error("⚠️ No vault loaded. Please reload the demo vault or upload a custom vault.")
+    if not api_key:
+        st.error("⚠️ Please provide an OpenAI API Key in the sidebar to generate answers.")
+    elif not st.session_state.vector_store:
+        st.error("⚠️ No vault loaded. Please click 'Load Demo Vault' in the sidebar or upload a custom vault.")
     else:
         # 2. Append and render User message
         st.session_state.messages.append({"role": "user", "content": user_input})
@@ -312,7 +330,7 @@ if user_input:
                     retrieved = st.session_state.vector_store.search(user_input, top_k=4)
                     
                     # Generate Answer
-                    openai_client = OpenAI(api_key=server_api_key)
+                    openai_client = OpenAI(api_key=api_key)
                     rag_res: RAGResponse = generate_rag_answer(
                         query=user_input,
                         retrieved_chunks=retrieved,
