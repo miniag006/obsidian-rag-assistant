@@ -146,6 +146,9 @@ def initialize_vault(vault_path: Path, vault_label: str, active_api_key: str):
 # Resolve API Key
 server_key, provider = get_server_api_key()
 
+if "saved_api_key" not in st.session_state:
+    st.session_state.saved_api_key = server_key
+
 # --- Sidebar UI ---
 with st.sidebar:
     st.title("⚙️ Vault Settings")
@@ -157,12 +160,15 @@ with st.sidebar:
         st.markdown("🔑 **Google Gemini API Key** *(Free)*")
         user_key_input = st.text_input(
             "Enter Gemini API Key",
+            value=st.session_state.get("saved_api_key", ""),
             type="password",
             placeholder="AIzaSy...",
             help="Free key from Google AI Studio (https://aistudio.google.com/)"
         )
         st.caption("✨ [Get a Free Gemini API Key at aistudio.google.com](https://aistudio.google.com/) (no credit card needed).")
-        api_key = user_key_input.strip()
+        if user_key_input:
+            st.session_state.saved_api_key = user_key_input.strip()
+        api_key = st.session_state.get("saved_api_key", "") or server_key
 
     st.markdown("---")
     st.subheader("📚 Knowledge Vault")
@@ -375,6 +381,7 @@ if user_input:
                         query=user_input,
                         retrieved_chunks=retrieved,
                         openai_client=client,
+                        api_key=api_key,
                         model_name=model_name,
                         chat_history=st.session_state.messages
                     )

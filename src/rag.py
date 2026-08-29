@@ -91,6 +91,9 @@ def call_gemini_generate_rest(prompt: str, api_key: str, model: str = "gemini-1.
     Guarantees clean UTF-8 encoding without SDK wrapper serialization errors.
     """
     clean_key = api_key.strip()
+    if not clean_key:
+        raise ValueError("No Gemini API key provided. Please enter your API key in the sidebar.")
+
     candidate_models = [model, "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash"]
     
     seen = set()
@@ -140,6 +143,7 @@ def generate_rag_answer(
     query: str,
     retrieved_chunks: List[RetrievedChunk],
     openai_client: Optional[OpenAI] = None,
+    api_key: Optional[str] = None,
     model_name: Optional[str] = None,
     chat_history: Optional[List[dict]] = None,
     similarity_threshold: float = 0.15,
@@ -147,11 +151,19 @@ def generate_rag_answer(
     """
     Executes the grounded RAG generation step with robust multi-model fallback and unicode sanitization.
     """
-    api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
-    if openai_client and getattr(openai_client, "api_key", None):
-        api_key = str(openai_client.api_key).strip()
+    key = (api_key or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
+    if not key and openai_client and getattr(openai_client, "api_key", None):
+        key = str(openai_client.api_key).strip()
 
-    is_gemini = not api_key.startswith("sk-") or bool(os.getenv("GEMINI_API_KEY"))
+    if not key:
+        return RAGResponse(
+            answer="⚠️ No API key found. Please enter your Google Gemini API key in the sidebar.",
+            sources=[],
+            retrieved_chunks=retrieved_chunks,
+            is_insufficient_info=False,
+        )
+
+    is_gemini = not key.startswith("sk-") or bool(os.getenv("GEMINI_API_KEY"))
 
     valid_chunks = [c for c in retrieved_chunks if c.similarity_score >= similarity_threshold]
 
@@ -182,16 +194,16 @@ def generate_rag_answer(
     )
 
     try:
-        if is_gemini and api_key:
+        if is_gemini:
             # Direct REST Gemini call
             answer = call_gemini_generate_rest(
                 prompt=user_prompt,
-                api_key=api_key,
+                api_key=key,
                 model=model_name or "gemini-1.5-flash"
             )
         else:
             # OpenAI API call
-            client = openai_client or OpenAI(api_key=api_key)
+            client = openai_client or OpenAI(api_key=key)
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt}
