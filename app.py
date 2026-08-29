@@ -193,15 +193,15 @@ with st.sidebar:
                 initialize_vault(demo_vault_dir, "Demo AI Knowledge Vault", api_key)
 
     elif vault_source == "Upload Custom Vault":
-        st.caption("Upload a `.zip` archive containing your Obsidian `.md` notes, or individual `.md` files.")
-        uploaded_file = st.file_uploader(
-            "Upload Vault ZIP or Markdown",
+        st.caption("Upload a `.zip` archive containing your Obsidian vault, or select multiple `.md` files at once.")
+        uploaded_files = st.file_uploader(
+            "Upload Vault ZIP or Markdown Notes",
             type=["zip", "md"],
-            accept_multiple_files=False,
-            help="Upload a zipped Obsidian vault folder or single .md note."
+            accept_multiple_files=True,
+            help="Select one or more .md note files or a zipped Obsidian vault."
         )
 
-        if uploaded_file and st.button("📥 Process & Index Vault", use_container_width=True):
+        if uploaded_files and st.button("📥 Process & Index Vault", use_container_width=True):
             if not api_key:
                 st.session_state.vault_load_error = "Please enter an API Key to index the vault."
             else:
@@ -210,13 +210,17 @@ with st.sidebar:
                     shutil.rmtree(temp_dir)
                 temp_dir.mkdir(parents=True, exist_ok=True)
 
-                if uploaded_file.name.endswith(".zip"):
-                    extracted_path = extract_vault_zip(uploaded_file, temp_dir)
-                    initialize_vault(extracted_path, f"Uploaded Vault ({uploaded_file.name})", api_key)
-                elif uploaded_file.name.endswith(".md"):
-                    note_path = temp_dir / uploaded_file.name
-                    note_path.write_bytes(uploaded_file.getbuffer())
-                    initialize_vault(temp_dir, f"Uploaded Note ({uploaded_file.name})", api_key)
+                zip_files = [f for f in uploaded_files if f.name.endswith(".zip")]
+                md_files = [f for f in uploaded_files if f.name.endswith(".md")]
+
+                if zip_files:
+                    extracted_path = extract_vault_zip(zip_files[0], temp_dir)
+                    initialize_vault(extracted_path, f"Uploaded Vault ({zip_files[0].name})", api_key)
+                elif md_files:
+                    for f in md_files:
+                        note_path = temp_dir / f.name
+                        note_path.write_bytes(f.getbuffer())
+                    initialize_vault(temp_dir, f"Uploaded Vault ({len(md_files)} notes)", api_key)
 
     # Auto-load demo vault if API key is present and not yet loaded
     if api_key and st.session_state.vector_store is None:
