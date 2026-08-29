@@ -1,6 +1,6 @@
 """
-ChromaDB Vector Store & OpenAI Embeddings Manager
-Handles chunk indexing, embedding generation via OpenAI API, and semantic similarity search.
+ChromaDB Vector Store & Embeddings Manager
+Handles chunk indexing, embedding generation via Gemini/OpenAI API, and semantic similarity search.
 """
 
 from dataclasses import dataclass
@@ -32,21 +32,52 @@ class RetrievedChunk:
     similarity_score: float  # Normalized 0.0 - 1.0 score (higher is more relevant)
 
 
+def get_default_client(api_key: Optional[str] = None) -> tuple[OpenAI, str]:
+    """
+    Initializes an OpenAI-compatible client configured for Google Gemini API (Free)
+    or OpenAI depending on the provided key.
+    
+    Returns:
+        tuple[OpenAI, str]: (client_instance, default_embedding_model)
+    """
+    key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    
+    # Check if this is a Gemini API key or configured for Gemini
+    is_gemini = bool(os.getenv("GEMINI_API_KEY") or (key and not key.startswith("sk-")))
+
+    if is_gemini:
+        client = OpenAI(
+            api_key=key,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+        )
+        embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "text-embedding-004")
+    else:
+        client = OpenAI(api_key=key)
+        embedding_model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+
+    return client, embedding_model
+
+
 class VaultVectorStore:
     """
     Manages ChromaDB vector indexing and retrieval for Obsidian vault chunks.
-    Uses OpenAI's text-embedding-3-small model for generating vector embeddings.
+    Uses Google Gemini text-embedding-004 (or OpenAI) for generating vector embeddings.
     """
 
     def __init__(
         self,
         openai_client: Optional[OpenAI] = None,
-        embedding_model: str = "text-embedding-3-small",
+        embedding_model: Optional[str] = None,
         collection_name: str = "obsidian_vault",
         persist_directory: Optional[str] = None,
     ):
-        self.embedding_model = embedding_model or os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-        self.client = openai_client or OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        if openai_client:
+            self.client = openai_client
+            self.embedding_model = embedding_model or os.getenv("GEMINI_EMBEDDING_MODEL", "text-embedding-004")
+        else:
+            self.client, default_model = get_default_client()
+            self.embedding_model = embedding_model or default_model
+
         self.collection_name = collection_name
         
         # Initialize ChromaDB client (persistent if directory provided, otherwise ephemeral in-memory)
@@ -63,12 +94,11 @@ class VaultVectorStore:
 
     def get_embeddings_batch(self, texts: List[str], batch_size: int = 64) -> List[List[float]]:
         """
-        Generates OpenAI embeddings for a list of text strings in batches.
+        Generates embeddings for a list of text strings in batches.
         """
         embeddings: List[List[float]] = []
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
-            # Replace newlines with spaces for optimal embedding model performance
             cleaned_batch = [t.replace("\n", " ") for t in batch]
             response = self.client.embeddings.create(
                 model=self.embedding_model,
@@ -82,9 +112,6 @@ class VaultVectorStore:
         """
         Indexes a list of NoteChunks into the ChromaDB collection.
         Replaces any existing collection with fresh vectors and metadata.
-        
-        Returns:
-            int: Number of chunks indexed.
         """
         if not chunks:
             return 0
@@ -119,13 +146,6 @@ class VaultVectorStore:
     def search(self, query: str, top_k: int = 4) -> List[RetrievedChunk]:
         """
         Performs semantic similarity search for a query string against the indexed vault.
-        
-        Args:
-            query: The user query or question.
-            top_k: Number of most relevant chunks to retrieve.
-            
-        Returns:
-            List[RetrievedChunk]: Ranked retrieved chunks with metadata and similarity scores.
         """
         if not query.strip():
             return []
@@ -134,7 +154,6 @@ class VaultVectorStore:
         if count == 0:
             return []
 
-        # Adjust top_k if total indexed chunks is smaller
         k = min(top_k, count)
 
         # Embed query
@@ -163,8 +182,6 @@ class VaultVectorStore:
         ids = results["ids"][0] if "ids" in results and results["ids"] else [f"c_{i}" for i in range(len(docs))]
 
         for doc_text, meta, dist, cid in zip(docs, metas, distances, ids):
-            # For cosine distance in ChromaDB: distance = 1 - cosine_similarity
-            # Therefore similarity = 1.0 - distance (or max(0.0, 1.0 - dist))
             similarity = max(0.0, min(1.0, 1.0 - float(dist)))
 
             retrieved.append(

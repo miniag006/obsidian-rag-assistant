@@ -2,7 +2,7 @@
 
 A lightweight, student-level **Retrieval-Augmented Generation (RAG)** MVP that turns your personal [Obsidian](https://obsidian.md/) Markdown knowledge vault into an interactive, verifiable AI assistant.
 
-Built with **pure Python**, **Streamlit**, **OpenAI API**, and **ChromaDB** — without complex orchestrator frameworks like LangChain or LlamaIndex — making every component clean, explainable, and production-minded.
+Powered by **Google Gemini API** (Free Tier via Google AI Studio) and **ChromaDB** — built with pure Python and Streamlit without heavy framework bloat (no LangChain, LlamaIndex), making every single component clean, explainable, and production-minded.
 
 ---
 
@@ -29,11 +29,11 @@ Built with **pure Python**, **Streamlit**, **OpenAI API**, and **ChromaDB** — 
 2. **Section-Aware Document Chunking**:
    - Splits notes along structural markdown headers and paragraph boundaries.
    - Preserves exact character offsets and section names to enable precise source citations.
-3. **ChromaDB & OpenAI Embeddings**:
-   - Embeds text chunks into dense 1536-dimensional vectors using OpenAI `text-embedding-3-small`.
+3. **ChromaDB & Google Gemini Embeddings**:
+   - Embeds text chunks into dense vectors using Gemini's `text-embedding-004` (Free tier).
    - Stores and performs fast cosine similarity queries via an embedded ChromaDB collection.
 4. **Strictly Grounded Generation**:
-   - LLM generation (using `gpt-4o-mini`) is strictly constrained to the retrieved vault context.
+   - LLM generation (using `gemini-2.0-flash`) is strictly constrained to the retrieved vault context.
    - If information is missing from the vault, the assistant safely returns:  
      > *"I couldn't find enough information about this in your Obsidian knowledge base."*
 5. **Interactive Source Viewer with Exact Passage Highlighting (Core Feature)**:
@@ -49,10 +49,10 @@ Built with **pure Python**, **Streamlit**, **OpenAI API**, and **ChromaDB** — 
 
 ```
 1. Ingestion:
-   Obsidian Notes (.md) ──► pathlib Loader ──► Section Chunker ──► OpenAI Embeddings ──► ChromaDB Vector Store
+   Obsidian Notes (.md) ──► pathlib Loader ──► Section Chunker ──► Gemini Embeddings (text-embedding-004) ──► ChromaDB Vector Store
 
 2. Query & Grounding:
-   User Question ──► Query Embedding ──► Top-K Vector Search ──► Context Prompt ──► LLM (gpt-4o-mini) ──► Grounded Answer + Source Metadata
+   User Question ──► Query Embedding ──► Top-K Vector Search ──► Context Prompt ──► LLM (gemini-2.0-flash) ──► Grounded Answer + Source Metadata
 
 3. Verification:
    Click Source Note ──► In-App Document Viewer ──► Exact Passage Highlighted in Full Markdown
@@ -67,7 +67,7 @@ flowchart TD
     subgraph Ingestion["1. Ingestion Pipeline"]
         MD["Obsidian Notes (*.md)"] --> Loader["src/loader.py\n(Pathlib recursive reader)"]
         Loader --> Chunker["src/chunker.py\n(Section-aware parser)"]
-        Chunker --> Embedder["OpenAI Embeddings\n(text-embedding-3-small)"]
+        Chunker --> Embedder["Gemini Embeddings\n(text-embedding-004)"]
         Embedder --> ChromaDB[("ChromaDB Vector Store\n(src/vectorstore.py)")]
     end
 
@@ -76,7 +76,7 @@ flowchart TD
         QEmbed --> Retriever["ChromaDB Cosine Similarity Search"]
         ChromaDB --> Retriever
         Retriever --> Context["Augmented Prompt Construction\n(src/rag.py)"]
-        Context --> LLM["OpenAI LLM\n(gpt-4o-mini)"]
+        Context --> LLM["Google Gemini LLM\n(gemini-2.0-flash)"]
         LLM --> Answer["Grounded Answer + Citations"]
     end
 
@@ -97,8 +97,8 @@ Strictly minimal and free of unnecessary bloatware:
 | **Language** | Python 3.10+ | Clean, readable implementation |
 | **User Interface** | Streamlit | Fast, intuitive web application |
 | **Vector Store** | ChromaDB | Lightweight, embedded vector database |
-| **Embedding Model** | OpenAI `text-embedding-3-small` | 1536-dimensional semantic representation |
-| **LLM Generation** | OpenAI `gpt-4o-mini` | Deterministic, grounded response synthesis |
+| **Embedding Model** | Google Gemini `text-embedding-004` (Free) | 768-dimensional semantic representation |
+| **LLM Generation** | Google Gemini `gemini-2.0-flash` (Free) | Fast, deterministic grounded synthesis |
 | **File Traversal** | Python `pathlib` | Native file system handling for `.md` notes |
 | **Configuration** | `python-dotenv` | Secure API key management |
 
@@ -126,7 +126,7 @@ obsidian-rag-assistant/
     ├── __init__.py             # Python package marker
     ├── loader.py               # Markdown file discovery & title extraction
     ├── chunker.py              # Header/section-aware chunking with character offsets
-    ├── vectorstore.py          # ChromaDB collection & OpenAI embedding client
+    ├── vectorstore.py          # ChromaDB collection & Gemini embedding client
     ├── rag.py                  # Grounded prompt construction & LLM inference
     └── utils.py                # Source highlighting engine & ZIP vault extractor
 ```
@@ -150,7 +150,9 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure API Key
+### 2. Configure Free API Key
+
+Get a free Gemini API key from [Google AI Studio](https://aistudio.google.com/) (no credit card required).
 
 Create a `.env` file in the root directory:
 
@@ -158,11 +160,12 @@ Create a `.env` file in the root directory:
 cp .env.example .env
 ```
 
-Add your OpenAI API Key inside `.env`:
+Add your Gemini API Key inside `.env`:
 ```env
-OPENAI_API_KEY=sk-your-actual-api-key-here
+GEMINI_API_KEY=AIzaSy...your_gemini_key
 ```
-*(Alternatively, you can enter the API key directly in the Streamlit sidebar input field).*
+
+*(Alternatively, you can paste the key directly in the Streamlit sidebar field).*
 
 ### 3. Launch the Application
 
@@ -179,7 +182,7 @@ Open your browser to `http://localhost:8501`.
 1. **Open the App**: Notice the clean, intuitive interface.
 2. **Click "Load Demo Vault"**: Instantly parses all 5 notes, breaks them into 40 section chunks, and generates vector embeddings.
 3. **Ask a Question**: E.g., *"What is RAG and why is it useful?"*
-4. **Inspect the Answer**: The LLM synthesizes a concise, factually grounded answer.
+4. **Inspect the Answer**: Gemini synthesizes a concise, factually grounded answer.
 5. **Click a Source Note**: Under the answer, click `📄 RAG.md`.
 6. **Verify Highlighted Passage**: The full note opens in the viewer with the exact passage used to answer your question highlighted in yellow.
 7. **Test Out-of-Vault Fallback**: Ask *"What is the recipe for baking chocolate cookies?"*. Notice the assistant avoids hallucination and clearly indicates the knowledge is missing.
@@ -212,7 +215,7 @@ Instead of blindly splitting text every 500 characters, `src/chunker.py` parses 
 - `chunk_id`: Unique identifier formatted as `filename#chunk_index`.
 
 ### 3. Why are Embeddings needed?
-Traditional keyword search (e.g., BM25 or grep) fails when a user uses synonyms (e.g. asking *"plumbing fix"* when the document says *"repair leaky pipe"*). Dense vector embeddings map text to high-dimensional space where semantic distance corresponds to conceptual similarity.
+Traditional keyword search fails when a user uses synonyms (e.g. asking *"plumbing fix"* when the document says *"repair leaky pipe"*). Dense vector embeddings map text to high-dimensional space where semantic distance corresponds to conceptual similarity.
 
 ### 4. How does ChromaDB work here?
 ChromaDB runs in-memory or persisted locally. It builds an **HNSW (Hierarchical Navigable Small World)** graph index over the vectors, enabling sub-millisecond approximate nearest neighbor searches using Cosine Distance:
@@ -229,5 +232,5 @@ Because `src/chunker.py` stores the exact raw text and character offsets of each
 ## ⚠️ Limitations & Future Roadmap
 
 - **Graph Traversal**: Currently retrieves chunks via vector similarity; future versions can traverse Obsidian `[[wikilinks]]` for multi-hop graph RAG.
-- **Reranking**: Adding a cross-encoder reranker (e.g., Cohere / BGE reranker) could further improve retrieval precision on very large vaults (>1,000 notes).
+- **Reranking**: Adding a cross-encoder reranker (e.g., BGE reranker) could further improve retrieval precision on very large vaults (>1,000 notes).
 - **Hybrid Search**: Combining BM25 keyword search with dense vector search for hybrid lexical + semantic retrieval.

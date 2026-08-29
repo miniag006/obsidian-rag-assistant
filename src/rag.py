@@ -1,6 +1,7 @@
 """
 RAG Generation & Context Grounding Pipeline
-Constructs augmented prompts and queries the OpenAI LLM with strict grounding rules.
+Constructs augmented prompts and queries the LLM with strict grounding rules.
+Supports Google Gemini API (Free tier) and OpenAI API seamlessly.
 """
 
 from dataclasses import dataclass
@@ -9,9 +10,9 @@ from typing import List, Optional
 from openai import OpenAI
 
 try:
-    from src.vectorstore import RetrievedChunk
+    from src.vectorstore import RetrievedChunk, get_default_client
 except ModuleNotFoundError:
-    from vectorstore import RetrievedChunk
+    from vectorstore import RetrievedChunk, get_default_client
 
 
 FALLBACK_MESSAGE = "I couldn't find enough information about this in your Obsidian knowledge base."
@@ -62,28 +63,26 @@ def generate_rag_answer(
     query: str,
     retrieved_chunks: List[RetrievedChunk],
     openai_client: Optional[OpenAI] = None,
-    model_name: str = "gpt-4o-mini",
+    model_name: Optional[str] = None,
     chat_history: Optional[List[dict]] = None,
     similarity_threshold: float = 0.25,
 ) -> RAGResponse:
     """
     Executes the grounded RAG generation step.
-    
-    Args:
-        query: The user question.
-        retrieved_chunks: Chunks retrieved from vector search.
-        openai_client: Configured OpenAI client.
-        model_name: OpenAI chat completion model name (e.g. gpt-4o-mini).
-        chat_history: Optional prior messages in [{"role": ..., "content": ...}] format.
-        similarity_threshold: Minimum similarity score required to consider context relevant.
-        
-    Returns:
-        RAGResponse: Object containing answer, sources list, and retrieval metadata.
     """
-    client = openai_client or OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    model = model_name or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    if openai_client:
+        client = openai_client
+    else:
+        client, _ = get_default_client()
 
-    # If no chunks or all retrieved chunks have very low similarity
+    # Determine default model (Gemini or OpenAI)
+    if model_name:
+        model = model_name
+    elif os.getenv("GEMINI_API_KEY") or str(client.base_url).startswith("https://generativelanguage.googleapis.com"):
+        model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    else:
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
     valid_chunks = [c for c in retrieved_chunks if c.similarity_score >= similarity_threshold]
 
     if not valid_chunks:
@@ -117,7 +116,7 @@ def generate_rag_answer(
         response = client.chat.completions.create(
             model=model,
             messages=messages,
-            temperature=0.0,  # Deterministic, fact-grounded responses
+            temperature=0.0,
         )
         answer = response.choices[0].message.content.strip()
     except Exception as e:
@@ -129,10 +128,8 @@ def generate_rag_answer(
             is_insufficient_info=False,
         )
 
-    # Check if answer triggered the fallback
     is_fallback = FALLBACK_MESSAGE.lower() in answer.lower()
 
-    # Extract unique source filenames from valid chunks
     unique_sources = []
     seen = set()
     for c in valid_chunks:
