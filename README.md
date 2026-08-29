@@ -6,6 +6,12 @@ Powered by **Google Gemini API** (Free Tier via Google AI Studio) and **ChromaDB
 
 ---
 
+## Live Demo
+
+https://obsidian-rag-assistant.streamlit.app/
+
+---
+
 ## 📑 Table of Contents
 - [Key Features](#-key-features)
 - [How It Works](#-how-it-works)
