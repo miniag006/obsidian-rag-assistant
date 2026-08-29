@@ -199,10 +199,7 @@ if "saved_api_key" not in st.session_state:
 
 # --- Sidebar UI ---
 with st.sidebar:
-    st.title("⚙️ Vault Settings")
-
     if server_key:
-        st.success(f"🔒 **API Key:** Configured ({provider})")
         api_key = server_key
     else:
         st.markdown("🔑 **Google Gemini API Key** *(Free)*")
@@ -217,8 +214,8 @@ with st.sidebar:
         if user_key_input:
             st.session_state.saved_api_key = user_key_input.strip()
         api_key = st.session_state.get("saved_api_key", "") or server_key
+        st.markdown("---")
 
-    st.markdown("---")
     st.subheader("📚 Knowledge Vault")
 
     # CHANGE 2: Make vault upload option prominent and noticeable
