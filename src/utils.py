@@ -1,6 +1,7 @@
 """
 Utility functions for Obsidian Vault RAG Assistant:
 - Multi-passage highlighting in full Markdown notes
+- Unicode string sanitization
 - Secure ZIP vault extraction
 """
 
@@ -8,7 +9,31 @@ from pathlib import Path
 import re
 import shutil
 from typing import List, Optional, Tuple
+import unicodedata
 import zipfile
+
+
+def clean_unicode(text: str) -> str:
+    """
+    Sanitizes Unicode typographic smart quotes, dashes, and non-ASCII artifacts
+    to prevent ASCII codec encoding errors across HTTP clients and LLM APIs.
+    """
+    if not text:
+        return ""
+    replacements = {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2026": "...",
+        "\u00a0": " ",
+        "\u200b": "",
+    }
+    for orig, rep in replacements.items():
+        text = text.replace(orig, rep)
+    return unicodedata.normalize("NFKD", text)
 
 
 def normalize_whitespace(text: str) -> str:
@@ -23,13 +48,6 @@ def highlight_passages_in_markdown(
     """
     Locates all retrieved passages within the full original Markdown note
     and wraps each in an HTML <mark> highlight block.
-    
-    Args:
-        full_content: The entire raw Markdown note text.
-        passages: List of retrieved chunk text strings belonging to this note.
-        
-    Returns:
-        Tuple[str, int]: (highlighted_markdown, number_of_passages_highlighted)
     """
     content = full_content
     found_count = 0
@@ -50,13 +68,11 @@ def highlight_passages_in_markdown(
 
         banner = highlight_start_template.format(idx=i, total=total)
 
-        # 1. Direct exact match
         if clean_passage in content:
             content = content.replace(clean_passage, f"{banner}{clean_passage}{highlight_end}", 1)
             found_count += 1
             continue
 
-        # 2. Paragraph match
         paragraphs = [p.strip() for p in clean_passage.split("\n\n") if len(p.strip()) > 30]
         if paragraphs and paragraphs[0] in content and paragraphs[-1] in content:
             first_p = paragraphs[0]
@@ -70,7 +86,6 @@ def highlight_passages_in_markdown(
                 found_count += 1
                 continue
 
-        # 3. Fuzzy whitespace regex match
         escaped_tokens = [re.escape(tok) for tok in clean_passage.split()]
         if escaped_tokens:
             fuzzy_pattern = r"\s+".join(escaped_tokens)
@@ -86,7 +101,6 @@ def highlight_passages_in_markdown(
     return content, found_count
 
 
-# Backwards compatibility alias
 def highlight_passage_in_markdown(full_content: str, passage: str, heading: Optional[str] = None) -> Tuple[str, bool]:
     res, count = highlight_passages_in_markdown(full_content, [passage])
     return res, count > 0

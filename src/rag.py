@@ -11,8 +11,10 @@ from openai import OpenAI
 
 try:
     from src.vectorstore import RetrievedChunk, get_default_client
+    from src.utils import clean_unicode
 except ModuleNotFoundError:
     from vectorstore import RetrievedChunk, get_default_client
+    from utils import clean_unicode
 
 
 FALLBACK_MESSAGE = "I couldn't find enough information about this in your Obsidian knowledge base."
@@ -90,7 +92,7 @@ def generate_rag_answer(
     similarity_threshold: float = 0.15,
 ) -> RAGResponse:
     """
-    Executes the grounded RAG generation step with robust multi-model fallback.
+    Executes the grounded RAG generation step with robust multi-model fallback and unicode sanitization.
     """
     if openai_client:
         client = openai_client
@@ -124,18 +126,17 @@ def generate_rag_answer(
             is_insufficient_info=True,
         )
 
-    context_text = format_context_for_llm(valid_chunks)
+    context_text = clean_unicode(format_context_for_llm(valid_chunks))
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    # Add short chat history if present (last 4 interactions)
     if chat_history:
         for msg in chat_history[-4:]:
             if msg.get("role") in ["user", "assistant"]:
-                messages.append({"role": msg["role"], "content": msg["content"]})
+                cleaned_msg_content = clean_unicode(msg["content"])
+                messages.append({"role": msg["role"], "content": cleaned_msg_content})
 
-    # User message with augmented context
-    user_prompt = (
+    user_prompt = clean_unicode(
         f"Context from Obsidian Vault:\n"
         f"{context_text}\n\n"
         f"Question:\n{query}\n\n"
