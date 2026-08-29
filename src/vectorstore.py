@@ -6,7 +6,7 @@ Handles chunk indexing, embedding generation via Gemini API / OpenAI API, and se
 from dataclasses import dataclass
 import json
 import os
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import urllib.request
 import urllib.error
 import chromadb
@@ -33,6 +33,30 @@ class RetrievedChunk:
     end_char: int
     distance: float
     similarity_score: float  # Normalized 0.0 - 1.0 score (higher is more relevant)
+
+
+def get_default_client(api_key: Optional[str] = None) -> Tuple[OpenAI, str]:
+    """
+    Initializes an OpenAI-compatible client configured for Google Gemini API (Free)
+    or OpenAI depending on the provided key.
+    
+    Returns:
+        tuple[OpenAI, str]: (client_instance, default_embedding_model)
+    """
+    key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+    is_gemini = bool(os.getenv("GEMINI_API_KEY") or (key and not key.startswith("sk-")))
+
+    if is_gemini:
+        client = OpenAI(
+            api_key=key,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+        )
+        embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "text-embedding-004")
+    else:
+        client = OpenAI(api_key=key)
+        embedding_model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+
+    return client, embedding_model
 
 
 def get_gemini_embeddings(texts: List[str], api_key: str, model: str = "text-embedding-004", batch_size: int = 32) -> List[List[float]]:
