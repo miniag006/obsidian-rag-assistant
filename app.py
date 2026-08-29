@@ -129,7 +129,7 @@ def initialize_vault(vault_path: Path, vault_label: str, active_api_key: str):
 
             # 3. Create Client & Vector Store
             client, model_name, embedding_model = create_client_for_key(active_api_key)
-            vector_store = VaultVectorStore(openai_client=client, embedding_model=embedding_model)
+            vector_store = VaultVectorStore(api_key=active_api_key, openai_client=client, embedding_model=embedding_model)
             indexed_count = vector_store.index_chunks(chunks)
 
             # 4. Save to session state

@@ -1,11 +1,14 @@
 """
 ChromaDB Vector Store & Embeddings Manager
-Handles chunk indexing, embedding generation via Gemini/OpenAI API, and semantic similarity search.
+Handles chunk indexing, embedding generation via Gemini API / OpenAI API, and semantic similarity search.
 """
 
 from dataclasses import dataclass
+import json
 import os
 from typing import List, Optional
+import urllib.request
+import urllib.error
 import chromadb
 from chromadb.config import Settings
 from openai import OpenAI
@@ -32,55 +35,91 @@ class RetrievedChunk:
     similarity_score: float  # Normalized 0.0 - 1.0 score (higher is more relevant)
 
 
-def get_default_client(api_key: Optional[str] = None) -> tuple[OpenAI, str]:
+def get_gemini_embeddings(texts: List[str], api_key: str, model: str = "text-embedding-004", batch_size: int = 32) -> List[List[float]]:
     """
-    Initializes an OpenAI-compatible client configured for Google Gemini API (Free)
-    or OpenAI depending on the provided key.
-    
-    Returns:
-        tuple[OpenAI, str]: (client_instance, default_embedding_model)
+    Fetches embeddings from Google Gemini API using standard Python HTTP request.
+    Endpoint: https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents
     """
-    key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
-    
-    # Check if this is a Gemini API key or configured for Gemini
-    is_gemini = bool(os.getenv("GEMINI_API_KEY") or (key and not key.startswith("sk-")))
+    embeddings: List[List[float]] = []
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents?key={api_key}"
 
-    if is_gemini:
-        client = OpenAI(
-            api_key=key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        requests_payload = []
+        for text in batch:
+            requests_payload.append({
+                "model": f"models/{model}",
+                "content": {"parts": [{"text": text.replace("\n", " ")}]}
+            })
+
+        body = json.dumps({"requests": requests_payload}).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json"}
         )
-        embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "text-embedding-004")
-    else:
-        client = OpenAI(api_key=key)
-        embedding_model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
 
-    return client, embedding_model
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                res_json = json.loads(resp.read().decode("utf-8"))
+                for emb_item in res_json.get("embeddings", []):
+                    embeddings.append(emb_item.get("values", []))
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Gemini Embedding API Error ({e.code}): {error_body}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to generate Gemini embeddings: {str(e)}")
+
+    return embeddings
+
+
+def get_openai_embeddings(texts: List[str], client: OpenAI, model: str = "text-embedding-3-small", batch_size: int = 64) -> List[List[float]]:
+    """
+    Fetches embeddings from OpenAI API using the OpenAI client.
+    """
+    embeddings: List[List[float]] = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        cleaned_batch = [t.replace("\n", " ") for t in batch]
+        response = client.embeddings.create(
+            model=model,
+            input=cleaned_batch
+        )
+        batch_embeddings = [item.embedding for item in response.data]
+        embeddings.extend(batch_embeddings)
+    return embeddings
 
 
 class VaultVectorStore:
     """
     Manages ChromaDB vector indexing and retrieval for Obsidian vault chunks.
-    Uses Google Gemini text-embedding-004 (or OpenAI) for generating vector embeddings.
+    Supports both Google Gemini API (text-embedding-004) and OpenAI API (text-embedding-3-small).
     """
 
     def __init__(
         self,
+        api_key: Optional[str] = None,
         openai_client: Optional[OpenAI] = None,
         embedding_model: Optional[str] = None,
         collection_name: str = "obsidian_vault",
         persist_directory: Optional[str] = None,
     ):
-        if openai_client:
-            self.client = openai_client
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+        self.is_gemini = bool(os.getenv("GEMINI_API_KEY") or (self.api_key and not self.api_key.startswith("sk-")))
+        
+        if self.is_gemini:
             self.embedding_model = embedding_model or os.getenv("GEMINI_EMBEDDING_MODEL", "text-embedding-004")
+            self.client = openai_client or OpenAI(
+                api_key=self.api_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+            )
         else:
-            self.client, default_model = get_default_client()
-            self.embedding_model = embedding_model or default_model
+            self.embedding_model = embedding_model or os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+            self.client = openai_client or OpenAI(api_key=self.api_key)
 
         self.collection_name = collection_name
         
-        # Initialize ChromaDB client (persistent if directory provided, otherwise ephemeral in-memory)
+        # Initialize ChromaDB client
         if persist_directory:
             os.makedirs(persist_directory, exist_ok=True)
             self.chroma_client = chromadb.PersistentClient(path=persist_directory)
@@ -92,47 +131,38 @@ class VaultVectorStore:
             metadata={"hnsw:space": "cosine"}
         )
 
-    def get_embeddings_batch(self, texts: List[str], batch_size: int = 64) -> List[List[float]]:
-        """
-        Generates embeddings for a list of text strings in batches.
-        """
-        embeddings: List[List[float]] = []
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
-            cleaned_batch = [t.replace("\n", " ") for t in batch]
-            response = self.client.embeddings.create(
-                model=self.embedding_model,
-                input=cleaned_batch
-            )
-            batch_embeddings = [item.embedding for item in response.data]
-            embeddings.extend(batch_embeddings)
-        return embeddings
+    def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Generates embeddings using the appropriate provider."""
+        if not texts:
+            return []
+            
+        if self.is_gemini:
+            return get_gemini_embeddings(texts, api_key=self.api_key, model=self.embedding_model)
+        else:
+            return get_openai_embeddings(texts, client=self.client, model=self.embedding_model)
 
     def index_chunks(self, chunks: List[NoteChunk]) -> int:
         """
         Indexes a list of NoteChunks into the ChromaDB collection.
-        Replaces any existing collection with fresh vectors and metadata.
+        Safely clears existing records before inserting fresh vectors.
         """
         if not chunks:
             return 0
 
-        # Reset or recreate collection to avoid mixing vaults
+        # Safely clear any existing items in the collection
         try:
-            self.chroma_client.delete_collection(self.collection_name)
+            existing = self.collection.get()
+            if existing and existing.get("ids"):
+                self.collection.delete(ids=existing["ids"])
         except Exception:
             pass
-            
-        self.collection = self.chroma_client.create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"}
-        )
 
         texts = [c.text for c in chunks]
         ids = [c.chunk_id for c in chunks]
         metadatas = [c.to_metadata_dict() for c in chunks]
 
         # Generate embeddings
-        embeddings = self.get_embeddings_batch(texts)
+        embeddings = self.generate_embeddings(texts)
 
         # Add to ChromaDB
         self.collection.add(
@@ -156,13 +186,12 @@ class VaultVectorStore:
 
         k = min(top_k, count)
 
-        # Embed query
-        clean_query = query.replace("\n", " ")
-        query_resp = self.client.embeddings.create(
-            model=self.embedding_model,
-            input=[clean_query]
-        )
-        query_embedding = query_resp.data[0].embedding
+        # Embed query vector
+        query_embeddings = self.generate_embeddings([query])
+        if not query_embeddings or not query_embeddings[0]:
+            return []
+            
+        query_embedding = query_embeddings[0]
 
         # Query ChromaDB
         results = self.collection.query(
