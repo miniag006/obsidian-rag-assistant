@@ -4,14 +4,13 @@ Handles chunk indexing, embedding generation via Gemini API / OpenAI API, and se
 """
 
 from dataclasses import dataclass
-import json
 import os
 from typing import List, Optional, Tuple
-import urllib.request
-import urllib.error
+import certifi
 import chromadb
 from chromadb.config import Settings
 from openai import OpenAI
+import requests
 
 try:
     from src.chunker import NoteChunk
@@ -61,7 +60,7 @@ def get_default_client(api_key: Optional[str] = None) -> Tuple[OpenAI, str]:
 
 def get_gemini_embeddings(texts: List[str], api_key: str, model: str = "text-embedding-004", batch_size: int = 32) -> List[List[float]]:
     """
-    Fetches embeddings from Google Gemini API using standard Python HTTP request.
+    Fetches embeddings from Google Gemini API using requests with certifi CA bundle.
     Endpoint: https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents
     """
     embeddings: List[List[float]] = []
@@ -76,23 +75,17 @@ def get_gemini_embeddings(texts: List[str], api_key: str, model: str = "text-emb
                 "content": {"parts": [{"text": text.replace("\n", " ")}]}
             })
 
-        body = json.dumps({"requests": requests_payload}).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={"Content-Type": "application/json"}
-        )
-
+        payload = {"requests": requests_payload}
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                res_json = json.loads(resp.read().decode("utf-8"))
-                for emb_item in res_json.get("embeddings", []):
-                    embeddings.append(emb_item.get("values", []))
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Gemini Embedding API Error ({e.code}): {error_body}")
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate Gemini embeddings: {str(e)}")
+            resp = requests.post(url, json=payload, timeout=30, verify=certifi.where())
+            if resp.status_code != 200:
+                raise RuntimeError(f"Gemini API Error ({resp.status_code}): {resp.text}")
+            
+            data = resp.json()
+            for emb_item in data.get("embeddings", []):
+                embeddings.append(emb_item.get("values", []))
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"Failed to connect to Gemini Embedding API: {str(e)}")
 
     return embeddings
 
@@ -143,12 +136,12 @@ class VaultVectorStore:
 
         self.collection_name = collection_name
         
-        # Initialize ChromaDB client
+        # Initialize Ephemeral or Persistent ChromaDB client
         if persist_directory:
             os.makedirs(persist_directory, exist_ok=True)
             self.chroma_client = chromadb.PersistentClient(path=persist_directory)
         else:
-            self.chroma_client = chromadb.Client(Settings(anonymized_telemetry=False, is_persistent=False))
+            self.chroma_client = chromadb.EphemeralClient()
             
         self.collection = self.chroma_client.get_or_create_collection(
             name=self.collection_name,
@@ -168,25 +161,30 @@ class VaultVectorStore:
     def index_chunks(self, chunks: List[NoteChunk]) -> int:
         """
         Indexes a list of NoteChunks into the ChromaDB collection.
-        Safely clears existing records before inserting fresh vectors.
+        Safely generates embeddings first, then creates the collection fresh.
         """
         if not chunks:
             return 0
 
-        # Safely clear any existing items in the collection
-        try:
-            existing = self.collection.get()
-            if existing and existing.get("ids"):
-                self.collection.delete(ids=existing["ids"])
-        except Exception:
-            pass
-
         texts = [c.text for c in chunks]
+        embeddings = self.generate_embeddings(texts)
+
+        if not embeddings or len(embeddings) != len(chunks):
+            raise RuntimeError(f"Failed to generate embeddings for all {len(chunks)} chunks.")
+
         ids = [c.chunk_id for c in chunks]
         metadatas = [c.to_metadata_dict() for c in chunks]
 
-        # Generate embeddings
-        embeddings = self.generate_embeddings(texts)
+        # Reset collection cleanly
+        try:
+            self.chroma_client.delete_collection(self.collection_name)
+        except Exception:
+            pass
+
+        self.collection = self.chroma_client.create_collection(
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"}
+        )
 
         # Add to ChromaDB
         self.collection.add(
