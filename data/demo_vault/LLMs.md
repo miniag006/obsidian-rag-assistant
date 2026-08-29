@@ -21,6 +21,12 @@ The development of modern LLMs typically involves three stages:
 - Models are refined using reward models that score outputs based on helpfulness, accuracy, and safety.
 - Techniques like Direct Preference Optimization (DPO) and PPO align model behavior with human intent.
 
+## Common Use Cases & Applications
+1. **Conversational Assistants & Chatbots**: Providing conversational Q&A, customer support, and personal knowledge assistance.
+2. **Code Generation & Debugging**: Synthesizing code snippets, translating across languages, and diagnosing unit test failures.
+3. **Content Summarization & Extraction**: Distilling lengthy research papers, financial reports, or email threads into actionable bullet points.
+4. **Agentic Workflows & Tool Use**: Serving as the central reasoning engine in [[AI_Agents]] for multi-step problem solving.
+
 ## Context Window and Tokenization
 - **Tokens**: The basic units of text processed by LLMs (approximately 4 characters or 0.75 words in English).
 - **Context Window**: The maximum number of tokens an LLM can process in a single inference call (e.g., 128k tokens for GPT-4o).

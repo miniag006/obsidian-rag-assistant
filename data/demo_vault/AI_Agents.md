@@ -26,6 +26,12 @@ The ReAct framework alternates between reasoning steps and action steps:
 - **Observation**: The system executes the action and feeds the output back into the prompt.
 - **Final Answer**: Once sufficient information is gathered, the agent generates the final response.
 
+## Common Use Cases
+1. **Autonomous Coding Assistants**: Reading repositories, diagnosing errors, writing code diffs, and executing automated test suites.
+2. **Deep Research & Synthesis**: Navigating the web or document vaults, cross-referencing citations, and generating verified briefing reports.
+3. **Customer Support & Workflow Automation**: Querying internal CRMs, executing database transactions, and resolving customer tickets end-to-end.
+4. **Agentic RAG**: Dynamically refining ambiguous user queries, retrieving multi-hop context across multiple vector databases, and validating factual grounding before returning answers.
+
 ## Difference Between RAG and Agents
 - **Standard RAG**: User Question $\rightarrow$ Single Retrieval Step $\rightarrow$ Single Generation Step $\rightarrow$ Output.
 - **Agentic RAG**: User Question $\rightarrow$ Query Reformulation $\rightarrow$ Retrieval $\rightarrow$ Evaluation of Relevance $\rightarrow$ Optional Secondary Retrieval $\rightarrow$ Synthesis.
