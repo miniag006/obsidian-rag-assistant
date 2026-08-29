@@ -337,13 +337,7 @@ for idx, msg in enumerate(st.session_state.messages):
                         }
                         st.rerun()
 
-            # Retrieval details expander
-            with st.expander("🔍 View Retrieval & Context Details"):
-                for i, chunk in enumerate(retrieved_chunks, 1):
-                    st.markdown(
-                        f"**[{i}] `{chunk.filename}`** — *Section:* `{chunk.heading}` | *Cosine Relevance:* `{chunk.similarity_score:.4f}`\n\n"
-                        f"> {chunk.text}\n"
-                    )
+
 
 
 # User Question Input Handling
