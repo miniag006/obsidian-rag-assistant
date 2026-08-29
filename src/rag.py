@@ -241,7 +241,7 @@ def generate_rag_answer(
     api_key: Optional[str] = None,
     model_name: Optional[str] = None,
     chat_history: Optional[List[dict]] = None,
-    similarity_threshold: float = 0.15,
+    similarity_threshold: float = 0.0,
 ) -> RAGResponse:
     """
     Executes the grounded RAG generation step with dynamic model discovery,
