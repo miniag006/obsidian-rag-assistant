@@ -1,6 +1,6 @@
 """
 Obsidian Markdown Document Chunker
-Splits markdown documents into semantically coherent chunks while preserving
+Splits markdown documents into semantically coherent sections while preserving
 precise section headers, character offsets, and source metadata for exact passage highlighting.
 """
 
@@ -43,12 +43,13 @@ class NoteChunk:
 
 def split_text_into_sections(markdown_text: str) -> List[tuple[str, str, int, int]]:
     """
-    Splits markdown content into structural sections based on markdown headers (#, ##, ###).
+    Splits markdown content into structural sections based on major markdown headers (# and ##).
+    Subsections (###) are kept together within their parent section for rich context.
     
     Returns:
         List of tuples: (heading_title, section_text, start_char, end_char)
     """
-    header_pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+    header_pattern = re.compile(r"^(#{1,2})\s+(.+)$", re.MULTILINE)
     matches = list(header_pattern.finditer(markdown_text))
     
     if not matches:
@@ -77,28 +78,19 @@ def split_text_into_sections(markdown_text: str) -> List[tuple[str, str, int, in
 
 def chunk_document(
     doc: NoteDocument,
-    target_chunk_size: int = 600,
-    chunk_overlap: int = 100
+    target_chunk_size: int = 1200,
+    chunk_overlap: int = 150
 ) -> List[NoteChunk]:
     """
     Chunks a single NoteDocument into NoteChunk objects.
     Preserves heading context and exact character offsets in the original note.
-    
-    Args:
-        doc: The NoteDocument to chunk.
-        target_chunk_size: Preferred maximum character length of each chunk.
-        chunk_overlap: Character overlap between consecutive split chunks.
-        
-    Returns:
-        List[NoteChunk]: The resulting list of chunks.
     """
     sections = split_text_into_sections(doc.content)
     chunks: List[NoteChunk] = []
     global_chunk_idx = 0
 
     for heading, sec_text, sec_start, sec_end in sections:
-        # If the entire section fits comfortably within the target size
-        if len(sec_text) <= target_chunk_size + 150:
+        if len(sec_text) <= target_chunk_size + 200:
             pos = doc.content.find(sec_text, sec_start)
             start_pos = pos if pos != -1 else sec_start
             end_pos = start_pos + len(sec_text)
@@ -117,7 +109,7 @@ def chunk_document(
             chunks.append(chunk)
             global_chunk_idx += 1
         else:
-            # Split section by paragraphs (\n\n) or sliding window
+            # For exceptionally long sections, split on double newlines
             paragraphs = [p.strip() for p in sec_text.split("\n\n") if p.strip()]
             current_buffer = []
             current_len = 0
@@ -173,8 +165,8 @@ def chunk_document(
 
 def chunk_vault(
     documents: List[NoteDocument],
-    target_chunk_size: int = 600,
-    chunk_overlap: int = 100
+    target_chunk_size: int = 1200,
+    chunk_overlap: int = 150
 ) -> List[NoteChunk]:
     """Chunks an entire list of NoteDocuments."""
     all_chunks: List[NoteChunk] = []
@@ -182,19 +174,3 @@ def chunk_vault(
         doc_chunks = chunk_document(doc, target_chunk_size, chunk_overlap)
         all_chunks.extend(doc_chunks)
     return all_chunks
-
-
-if __name__ == "__main__":
-    from pathlib import Path
-    try:
-        from src.loader import load_vault
-    except ModuleNotFoundError:
-        from loader import load_vault
-
-    docs = load_vault("data/demo_vault")
-    chunks = chunk_vault(docs)
-    print(f"Total notes: {len(docs)}, Total generated chunks: {len(chunks)}")
-    print("\nSample chunks:")
-    for c in chunks[:4]:
-        print(f"[{c.chunk_id}] {c.filename} | Heading: '{c.heading}' | Chars: {c.start_char}-{c.end_char} ({len(c.text)} chars)")
-        print(f"Preview: {c.text[:80]}...\n")

@@ -369,7 +369,7 @@ if user_input:
             with st.spinner("Searching Obsidian vault and reasoning with Gemini..."):
                 try:
                     # Semantic Search
-                    retrieved = st.session_state.vector_store.search(user_input, top_k=4)
+                    retrieved = st.session_state.vector_store.search(user_input, top_k=5)
                     
                     # Generate Answer
                     client, model_name, _ = create_client_for_key(api_key)

@@ -65,7 +65,7 @@ def generate_rag_answer(
     openai_client: Optional[OpenAI] = None,
     model_name: Optional[str] = None,
     chat_history: Optional[List[dict]] = None,
-    similarity_threshold: float = 0.20,
+    similarity_threshold: float = 0.15,
 ) -> RAGResponse:
     """
     Executes the grounded RAG generation step with robust multi-model fallback.
@@ -85,7 +85,6 @@ def generate_rag_answer(
         preferred = model_name or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         candidates = [preferred, "gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
 
-    # Deduplicate while preserving order
     seen_models = set()
     model_candidates = []
     for m in candidates:
@@ -125,7 +124,6 @@ def generate_rag_answer(
     answer = ""
     last_error = None
 
-    # Try model candidates in sequence
     for m in model_candidates:
         try:
             response = client.chat.completions.create(
