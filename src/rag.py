@@ -1,7 +1,7 @@
 """
 RAG Generation & Context Grounding Pipeline
 Constructs augmented prompts and queries the LLM with strict grounding rules.
-Supports Google Gemini API (Free tier) and OpenAI API seamlessly.
+Supports Google Gemini API (Free tier) and OpenAI API with multi-model fallback.
 """
 
 from dataclasses import dataclass
@@ -65,23 +65,33 @@ def generate_rag_answer(
     openai_client: Optional[OpenAI] = None,
     model_name: Optional[str] = None,
     chat_history: Optional[List[dict]] = None,
-    similarity_threshold: float = 0.25,
+    similarity_threshold: float = 0.20,
 ) -> RAGResponse:
     """
-    Executes the grounded RAG generation step.
+    Executes the grounded RAG generation step with robust multi-model fallback.
     """
     if openai_client:
         client = openai_client
     else:
         client, _ = get_default_client()
 
-    # Determine default model (Gemini or OpenAI)
-    if model_name:
-        model = model_name
-    elif os.getenv("GEMINI_API_KEY") or str(client.base_url).startswith("https://generativelanguage.googleapis.com"):
-        model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    is_gemini = os.getenv("GEMINI_API_KEY") or str(client.base_url).startswith("https://generativelanguage.googleapis.com")
+
+    # Build model candidate priority list
+    if is_gemini:
+        preferred = model_name or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        candidates = [preferred, "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-2.5-flash", "gemini-3.6-flash"]
     else:
-        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        preferred = model_name or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        candidates = [preferred, "gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
+
+    # Deduplicate while preserving order
+    seen_models = set()
+    model_candidates = []
+    for m in candidates:
+        if m and m not in seen_models:
+            seen_models.add(m)
+            model_candidates.append(m)
 
     valid_chunks = [c for c in retrieved_chunks if c.similarity_score >= similarity_threshold]
 
@@ -112,17 +122,28 @@ def generate_rag_answer(
     )
     messages.append({"role": "user", "content": user_prompt})
 
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=0.0,
-        )
-        answer = response.choices[0].message.content.strip()
-    except Exception as e:
-        answer = f"Error generating answer from LLM: {str(e)}"
+    answer = ""
+    last_error = None
+
+    # Try model candidates in sequence
+    for m in model_candidates:
+        try:
+            response = client.chat.completions.create(
+                model=m,
+                messages=messages,
+                temperature=0.0,
+            )
+            answer = response.choices[0].message.content.strip()
+            if answer:
+                break
+        except Exception as e:
+            last_error = e
+            continue
+
+    if not answer:
+        err_text = f"Error generating answer from LLM: {str(last_error)}" if last_error else "Failed to generate answer."
         return RAGResponse(
-            answer=answer,
+            answer=err_text,
             sources=[],
             retrieved_chunks=retrieved_chunks,
             is_insufficient_info=False,

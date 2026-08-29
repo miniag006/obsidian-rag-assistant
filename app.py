@@ -109,7 +109,7 @@ def create_client_for_key(key: str) -> tuple[OpenAI, str, str]:
             api_key=key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
         )
-        return client, "gemini-2.0-flash", "text-embedding-004"
+        return client, "gemini-1.5-flash", "text-embedding-004"
 
 
 def initialize_vault(vault_path: Path, vault_label: str, active_api_key: str):
