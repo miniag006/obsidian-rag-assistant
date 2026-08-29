@@ -85,16 +85,16 @@ def format_context_for_llm(chunks: List[RetrievedChunk]) -> str:
     return "\n".join(context_blocks)
 
 
-def call_gemini_generate_rest(prompt: str, api_key: str, model: str = "gemini-1.5-flash") -> str:
+def call_gemini_generate_rest(prompt: str, api_key: str, model: str = "gemini-3.6-flash") -> str:
     """
     Calls Google Gemini REST generateContent endpoint directly with certifi SSL verification.
-    Guarantees clean UTF-8 encoding without SDK wrapper serialization errors.
+    Uses current active models (gemini-3.6-flash) with clean UTF-8 encoding.
     """
     clean_key = api_key.strip()
     if not clean_key:
         raise ValueError("No Gemini API key provided. Please enter your API key in the sidebar.")
 
-    candidate_models = [model, "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash"]
+    candidate_models = ["gemini-3.6-flash", model, "gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
     
     seen = set()
     models = []
@@ -199,7 +199,7 @@ def generate_rag_answer(
             answer = call_gemini_generate_rest(
                 prompt=user_prompt,
                 api_key=key,
-                model=model_name or "gemini-1.5-flash"
+                model=model_name or "gemini-3.6-flash"
             )
         else:
             # OpenAI API call
