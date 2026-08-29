@@ -8,7 +8,7 @@ import unittest
 from src.loader import load_vault, extract_title_from_markdown, NoteDocument
 from src.chunker import chunk_document, chunk_vault, split_text_into_sections, NoteChunk
 from src.utils import highlight_passage_in_markdown, normalize_whitespace
-from src.rag import format_context_for_llm, FALLBACK_MESSAGE, RAGResponse
+from src.rag import format_context_for_llm, extract_supporting_sources_and_chunks, FALLBACK_MESSAGE, RAGResponse
 from src.vectorstore import RetrievedChunk
 
 
@@ -57,7 +57,6 @@ class TestObsidianRAGPipeline(unittest.TestCase):
         rag_doc = next(d for d in docs if d.filename == "RAG.md")
         chunks = chunk_document(rag_doc)
         
-        # Test highlighting for the first 3 chunks
         for chunk in chunks[:3]:
             highlighted, found = highlight_passage_in_markdown(
                 full_content=rag_doc.content,
@@ -86,6 +85,33 @@ class TestObsidianRAGPipeline(unittest.TestCase):
         self.assertIn("Source File: RAG.md", context_str)
         self.assertIn("Why RAG is Essential", context_str)
         self.assertIn("Hallucination Reduction is key.", context_str)
+
+    def test_precise_source_attribution_single_file(self):
+        """Verify that when 5 chunks from different files are retrieved, only the used note is attributed."""
+        c1 = RetrievedChunk("LLMs.md#1", "LLMs.md", "LLMs.md", "LLMs", "Pipeline", 1, "Pre-training, SFT, RLHF.", 0, 30, 0.1, 0.9)
+        c2 = RetrievedChunk("RAG.md#1", "RAG.md", "RAG.md", "RAG", "Intro", 1, "RAG overview.", 0, 20, 0.2, 0.8)
+        c3 = RetrievedChunk("AI_Agents.md#1", "AI_Agents.md", "AI_Agents.md", "Agents", "Intro", 1, "Agent overview.", 0, 20, 0.3, 0.7)
+        
+        raw_llm_response = "The LLM training pipeline has 3 stages: Pre-training, SFT, and RLHF.\n\n[SOURCES_USED: 1]"
+        clean_ans, sources, supp_chunks = extract_supporting_sources_and_chunks(raw_llm_response, [c1, c2, c3])
+        
+        self.assertEqual(sources, ["LLMs.md"])
+        self.assertEqual(len(supp_chunks), 1)
+        self.assertEqual(supp_chunks[0].filename, "LLMs.md")
+        self.assertNotIn("[SOURCES_USED", clean_ans)
+
+    def test_precise_source_attribution_multi_file(self):
+        """Verify that multi-file questions attribute all supporting files."""
+        c1 = RetrievedChunk("RAG.md#1", "RAG.md", "RAG.md", "RAG", "Intro", 1, "RAG retrieves external notes.", 0, 25, 0.1, 0.9)
+        c2 = RetrievedChunk("LLMs.md#1", "LLMs.md", "LLMs.md", "LLMs", "Intro", 1, "LLMs can hallucinate.", 0, 20, 0.15, 0.85)
+        c3 = RetrievedChunk("Embeddings.md#1", "Embeddings.md", "Embeddings.md", "Embeddings", "Intro", 1, "Embeddings are vectors.", 0, 30, 0.2, 0.8)
+        
+        raw_llm_response = "RAG helps LLMs by grounding their generation in verified external context.\n\n[SOURCES_USED: 1, 2]"
+        clean_ans, sources, supp_chunks = extract_supporting_sources_and_chunks(raw_llm_response, [c1, c2, c3])
+        
+        self.assertEqual(sources, ["RAG.md", "LLMs.md"])
+        self.assertEqual(len(supp_chunks), 2)
+        self.assertNotIn("[SOURCES_USED", clean_ans)
 
 
 if __name__ == "__main__":

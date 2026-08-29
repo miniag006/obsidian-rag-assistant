@@ -6,7 +6,8 @@ Supports Google Gemini API (Dynamic Model Discovery + REST + certifi) and OpenAI
 
 from dataclasses import dataclass
 import os
-from typing import List, Optional
+import re
+from typing import List, Optional, Tuple
 import certifi
 from openai import OpenAI
 import requests
@@ -29,7 +30,10 @@ CRITICAL GROUNDING RULES:
 2. If the provided context notes do NOT contain sufficient information to answer the question, you MUST respond with exactly:
    "I couldn't find enough information about this in your Obsidian knowledge base."
 3. When answering, be clear, structured, and factual. Use bullet points or concise paragraphs where appropriate.
-4. Always ground your claims. Do not make up citations or references."""
+4. Always ground your claims. Do not make up citations or references.
+5. SOURCE ATTRIBUTION: At the very end of your response, on a new line, list ONLY the context note indices (e.g. 1, 2) that directly provided the information used in your answer, in this exact format:
+   [SOURCES_USED: 1, 2]
+   If no context notes contained the answer, do not output this tag."""
 
 # Cache of discovered models per API key
 _DISCOVERED_MODELS_CACHE = {}
@@ -39,7 +43,7 @@ _DISCOVERED_MODELS_CACHE = {}
 class RAGResponse:
     """Represents the complete result of a RAG query execution."""
     answer: str
-    sources: List[str]  # List of unique source note filenames
+    sources: List[str]  # List of unique source note filenames that actually support the answer
     retrieved_chunks: List[RetrievedChunk]
     is_insufficient_info: bool
 
@@ -88,6 +92,56 @@ def format_context_for_llm(chunks: List[RetrievedChunk]) -> str:
     return "\n".join(context_blocks)
 
 
+def extract_supporting_sources_and_chunks(
+    raw_answer: str,
+    valid_chunks: List[RetrievedChunk]
+) -> Tuple[str, List[str], List[RetrievedChunk]]:
+    """
+    Extracts the clean answer, unique supporting source filenames, and supporting chunks
+    based on the LLM's explicit [SOURCES_USED: ...] citation tag, with a keyword overlap fallback.
+    """
+    pattern = r'\[SOURCES(?:_USED)?:\s*([0-9,\s]+)\]'
+    match = re.search(pattern, raw_answer, re.IGNORECASE)
+    
+    clean_answer = re.sub(pattern, '', raw_answer, flags=re.IGNORECASE).strip()
+    
+    is_fallback = FALLBACK_MESSAGE.lower() in clean_answer.lower()
+    if is_fallback:
+        return clean_answer, [], []
+
+    supporting_chunks = []
+    if match:
+        indices_str = match.group(1)
+        indices = [int(x.strip()) for x in indices_str.split(',') if x.strip().isdigit()]
+        for idx in indices:
+            if 1 <= idx <= len(valid_chunks):
+                chunk = valid_chunks[idx - 1]
+                if chunk not in supporting_chunks:
+                    supporting_chunks.append(chunk)
+
+    # Secondary fallback: word overlap between generated answer and chunk text
+    if not supporting_chunks and valid_chunks:
+        answer_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', clean_answer.lower()))
+        for c in valid_chunks:
+            chunk_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', c.text.lower()))
+            overlap = answer_words & chunk_words
+            if len(overlap) >= 3:
+                supporting_chunks.append(c)
+
+    # If still empty, default to the top-ranked valid chunk
+    if not supporting_chunks and valid_chunks:
+        supporting_chunks = [valid_chunks[0]]
+
+    unique_sources = []
+    seen = set()
+    for c in supporting_chunks:
+        if c.filename not in seen:
+            seen.add(c.filename)
+            unique_sources.append(c.filename)
+
+    return clean_answer, unique_sources, supporting_chunks
+
+
 def get_available_gemini_models(api_key: str) -> List[str]:
     """
     Dynamically queries Google Generative Language API for models supporting generateContent
@@ -116,7 +170,6 @@ def get_available_gemini_models(api_key: str) -> List[str]:
                     else:
                         other_models.append(name)
 
-            # Sort flash models to front for speed
             ordered = flash_models + other_models
             if ordered:
                 _DISCOVERED_MODELS_CACHE[clean_key] = ordered
@@ -124,7 +177,7 @@ def get_available_gemini_models(api_key: str) -> List[str]:
     except Exception:
         pass
 
-    fallback = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-3.6-flash"]
+    fallback = ["gemini-3.6-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash"]
     _DISCOVERED_MODELS_CACHE[clean_key] = fallback
     return fallback
 
@@ -138,10 +191,8 @@ def call_gemini_generate_rest(prompt: str, api_key: str, model: Optional[str] = 
     if not clean_key:
         raise ValueError("No Gemini API key provided. Please enter your API key in the sidebar.")
 
-    # Get dynamically discovered models for this account
     available_models = get_available_gemini_models(clean_key)
     
-    # If a specific model was requested and is available, try it first
     if model and model in available_models:
         candidate_models = [model] + [m for m in available_models if m != model]
     else:
@@ -193,7 +244,8 @@ def generate_rag_answer(
     similarity_threshold: float = 0.15,
 ) -> RAGResponse:
     """
-    Executes the grounded RAG generation step with robust dynamic model discovery and unicode sanitization.
+    Executes the grounded RAG generation step with dynamic model discovery,
+    unicode sanitization, and precise source attribution filtering.
     """
     key = (api_key or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
     if not key and openai_client and getattr(openai_client, "api_key", None):
@@ -239,7 +291,7 @@ def generate_rag_answer(
 
     try:
         if is_gemini:
-            answer = call_gemini_generate_rest(
+            raw_answer = call_gemini_generate_rest(
                 prompt=user_prompt,
                 api_key=key,
                 model=model_name
@@ -255,7 +307,7 @@ def generate_rag_answer(
                 messages=messages,
                 temperature=0.0
             )
-            answer = response.choices[0].message.content.strip()
+            raw_answer = response.choices[0].message.content.strip()
 
     except Exception as e:
         answer = f"Error generating answer from LLM: {str(e)}"
@@ -266,18 +318,16 @@ def generate_rag_answer(
             is_insufficient_info=False,
         )
 
-    is_fallback = FALLBACK_MESSAGE.lower() in answer.lower()
+    clean_answer, supporting_sources, supporting_chunks = extract_supporting_sources_and_chunks(
+        raw_answer=raw_answer,
+        valid_chunks=valid_chunks
+    )
 
-    unique_sources = []
-    seen = set()
-    for c in valid_chunks:
-        if c.filename not in seen:
-            seen.add(c.filename)
-            unique_sources.append(c.filename)
+    is_fallback = FALLBACK_MESSAGE.lower() in clean_answer.lower()
 
     return RAGResponse(
-        answer=answer,
-        sources=unique_sources if not is_fallback else [],
-        retrieved_chunks=valid_chunks,
+        answer=clean_answer,
+        sources=supporting_sources if not is_fallback else [],
+        retrieved_chunks=supporting_chunks if not is_fallback else valid_chunks,
         is_insufficient_info=is_fallback,
     )
