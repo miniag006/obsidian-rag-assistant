@@ -367,7 +367,7 @@ if user_input:
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        # 3. Retrieve chunks and generate answer
+        # 3. Retrieve chunks, generate answer, and rerun with stable widget keys
         with st.chat_message("assistant"):
             with st.spinner("Searching Obsidian vault and reasoning with Gemini..."):
                 try:
@@ -385,41 +385,6 @@ if user_input:
                         chat_history=st.session_state.messages
                     )
 
-                    # Display Answer
-                    st.markdown(rag_res.answer)
-
-                    # Display Sources
-                    if rag_res.sources and rag_res.retrieved_chunks:
-                        st.markdown("##### 📚 Sources Used:")
-                        
-                        file_chunks_map = {}
-                        for chunk in rag_res.retrieved_chunks:
-                            if chunk.filename not in file_chunks_map:
-                                file_chunks_map[chunk.filename] = []
-                            file_chunks_map[chunk.filename].append(chunk)
-                        
-                        cols = st.columns(max(len(file_chunks_map), 1))
-                        for c_idx, (fname, chunks_list) in enumerate(file_chunks_map.items()):
-                            with cols[c_idx]:
-                                sec_count = len(chunks_list)
-                                label_suffix = f" ({sec_count} sections)" if sec_count > 1 else ""
-                                btn_label = f"📄 {fname}{label_suffix}"
-                                if st.button(
-                                    btn_label,
-                                    key=f"live_src_{c_idx}_{fname}",
-                                    help=f"Click to open {fname} and highlight all {sec_count} retrieved passage(s)",
-                                    use_container_width=True
-                                ):
-                                    st.session_state.viewing_source = {
-                                        "filename": fname,
-                                        "title": chunks_list[0].title,
-                                        "sections": [c.heading for c in chunks_list],
-                                        "passages": [c.text for c in chunks_list],
-                                        "max_similarity": max(c.similarity_score for c in chunks_list),
-                                        "count": sec_count
-                                    }
-                                    st.rerun()
-
                     # Save Assistant message to state
                     st.session_state.messages.append({
                         "role": "assistant",
@@ -427,8 +392,9 @@ if user_input:
                         "sources": rag_res.sources,
                         "retrieved_chunks": rag_res.retrieved_chunks
                     })
+                    st.rerun()
 
                 except Exception as e:
                     err_msg = f"❌ An error occurred: {str(e)}"
-                    st.error(err_msg)
                     st.session_state.messages.append({"role": "assistant", "content": err_msg})
+                    st.rerun()
