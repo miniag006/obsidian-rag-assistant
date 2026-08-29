@@ -24,3 +24,7 @@ data/uploads/
 .DS_Store
 .AppleDouble
 .LSOverride
+
+# Streamlit & SQLite local files
+.streamlit/credentials.toml
+*.ses
