@@ -22,9 +22,16 @@ load_dotenv()
 
 # Helper to retrieve the server-side OpenAI API key from env or Streamlit secrets
 def get_openai_api_key() -> str:
-    # Check Streamlit secrets first (if deployed on Streamlit Cloud), then standard os.environ
-    if hasattr(st, "secrets") and "OPENAI_API_KEY" in st.secrets:
-        return st.secrets["OPENAI_API_KEY"].strip()
+    # Check Streamlit secrets first (if deployed on Streamlit Cloud)
+    try:
+        if hasattr(st, "secrets") and "OPENAI_API_KEY" in st.secrets:
+            key = st.secrets["OPENAI_API_KEY"]
+            if key:
+                return str(key).strip()
+    except Exception:
+        # secrets.toml does not exist locally; fall through to .env / os.environ
+        pass
+
     return os.getenv("OPENAI_API_KEY", "").strip()
 
 
