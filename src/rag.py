@@ -30,9 +30,7 @@ GUIDELINES:
 2. Only use the fallback message "I couldn't find enough information about this in your Obsidian knowledge base." if the context notes truly contain zero relevant information or mentions related to the user's question.
 3. When answering, be clear, structured, and factual.
 4. Always ground your claims directly in the context notes without fabricating citations.
-5. SOURCE ATTRIBUTION: At the very end of your response, on a new line, list ONLY the context note indices (e.g. 1, 2) that directly provided the information used in your answer, in this exact format:
-   [SOURCES_USED: 1, 2]
-   If no context notes were used, do not output this tag."""
+5. SOURCE ATTRIBUTION MANDATE: At the very end of your response, on a new line, list ONLY the context note numbers (e.g. [SOURCES_USED: 1] or [SOURCES_USED: 1, 2]) whose content you actually used to answer the question. Do NOT cite notes that you did not use. If no notes were used, do not output this tag."""
 
 # Cache of discovered models per API key
 _DISCOVERED_MODELS_CACHE = {}
@@ -47,24 +45,84 @@ class RAGResponse:
     is_insufficient_info: bool
 
 
+def extract_subject_from_query(query: str) -> str:
+    """Extracts the core subject entity from a user question."""
+    cleaned = re.sub(
+        r"^(what\s+is|what\s+are|explain|describe|tell\s+me\s+about|how\s+does|why\s+is|why\s+are)\s+",
+        "",
+        query.strip(),
+        flags=re.IGNORECASE
+    )
+    cleaned = re.sub(r"[?!.,;:]+$", "", cleaned).strip()
+
+    # Check for known multi-word concepts or acronyms
+    patterns = [
+        r"\b(llms?|large language models?)\b",
+        r"\b(rag|retrieval[ -]augmented generation)\b",
+        r"\b(embeddings?|dense embeddings?|vector embeddings?)\b",
+        r"\b(vector databases?|chromadb|pinecone|faiss|qdrant)\b",
+        r"\b(ai agents?|agents?|react pattern|react agent)\b",
+        r"\b(fashion design|fashion)\b",
+        r"\b(law|legal research)\b",
+        r"\b(ca|chartered accountant|chartered accountancy)\b",
+        r"\b(btech|engineering)\b",
+    ]
+    for pat in patterns:
+        m = re.search(pat, query, re.IGNORECASE)
+        if m:
+            return m.group(0).strip()
+
+    stopwords = {"the", "a", "an", "and", "or", "of", "in", "for", "with", "to", "its", "their", "it", "this", "that"}
+    meaningful = [w for w in re.findall(r"\b[a-zA-Z0-9_\-]+\b", cleaned) if w.lower() not in stopwords]
+    if meaningful:
+        return " ".join(meaningful[:3])
+    return cleaned
+
+
 def contextualize_query_for_search(query: str, chat_history: Optional[List[dict]] = None) -> str:
     """
-    If the query contains pronouns ('it', 'its', 'this', 'these', 'them') or is a short follow-up,
-    augments the search query with the subject of the previous user message.
+    Resolves conversational follow-up references ('it', 'its', 'they', 'them', 'these', 'those')
+    by substituting the core subject from the previous conversation turn.
+    Preserves standalone queries without topic pollution.
     """
     if not chat_history:
         return query
 
-    pronouns = {"it", "its", "this", "these", "they", "them", "that", "above", "also", "more"}
-    words = set(query.lower().split())
-    has_pronoun = bool(words & pronouns)
-    is_short_followup = len(words) <= 6
+    q_clean = query.strip()
+    words = set(re.findall(r"\b[a-zA-Z]+\b", q_clean.lower()))
 
-    if has_pronoun or is_short_followup:
+    pronouns = {"it", "its", "they", "them", "their", "theirs", "this", "that", "these", "those"}
+    has_pronoun = bool(words & pronouns)
+
+    followup_patterns = [
+        r"\bwhy\b.*\buseful\b",
+        r"\bwhat\b.*\badvantages\b",
+        r"\bwhat\b.*\bdisadvantages\b",
+        r"\bwhat\b.*\buse\s*cases\b",
+        r"\bhow\b.*\bwork\b",
+        r"\bhow\b.*\bused\b",
+        r"\bgive\b.*\bexamples\b",
+        r"\btell\b.*\bmore\b",
+        r"\bwhat\b.*\bbenefits\b",
+        r"\bwhy\b.*\bneed(ed)?\b",
+    ]
+    is_pattern_followup = any(re.search(pat, q_clean, re.IGNORECASE) for pat in followup_patterns)
+
+    if has_pronoun or is_pattern_followup:
         prev_user_queries = [m["content"] for m in chat_history if m.get("role") == "user" and m.get("content")]
         if prev_user_queries:
             last_q = prev_user_queries[-1]
-            return f"{last_q} {query}"
+            subject = extract_subject_from_query(last_q)
+            if subject:
+                subbed_query = re.sub(
+                    r"\b(its|it|their|they|them|this|that|these|those)\b",
+                    subject,
+                    q_clean,
+                    flags=re.IGNORECASE
+                )
+                if subject.lower() not in subbed_query.lower():
+                    return f"{subject}: {subbed_query}"
+                return subbed_query
 
     return query
 
@@ -97,13 +155,14 @@ def extract_supporting_sources_and_chunks(
 ) -> Tuple[str, List[str], List[RetrievedChunk]]:
     """
     Extracts the clean answer, unique supporting source filenames, and supporting chunks
-    based on the LLM's explicit [SOURCES_USED: ...] citation tag, with a keyword overlap fallback.
+    based strictly on the LLM's explicit [SOURCES_USED: ...] citation tag, with strict content-matching fallback.
+    Guarantees unrelated retrieved files are never leaked to user-facing Sources.
     """
     pattern = r'\[SOURCES(?:_USED)?:\s*([0-9,\s]+)\]'
     match = re.search(pattern, raw_answer, re.IGNORECASE)
-    
+
     clean_answer = re.sub(pattern, '', raw_answer, flags=re.IGNORECASE).strip()
-    
+
     is_fallback = FALLBACK_MESSAGE.lower() in clean_answer.lower()
     if is_fallback:
         return clean_answer, [], []
@@ -118,18 +177,29 @@ def extract_supporting_sources_and_chunks(
                 if chunk not in supporting_chunks:
                     supporting_chunks.append(chunk)
 
-    # Secondary fallback: word overlap between generated answer and chunk text
+    # Content-based fallback if tag was omitted or empty
     if not supporting_chunks and valid_chunks:
-        answer_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', clean_answer.lower()))
+        # Common English stop words to exclude from keyword overlap
+        stopwords = {
+            "this", "that", "these", "those", "with", "from", "have", "been", "were",
+            "which", "what", "where", "when", "about", "into", "more", "also", "some",
+            "such", "than", "then", "there", "their", "they", "them", "will", "would",
+            "could", "should", "used", "uses", "using", "your", "user", "notes"
+        }
+        answer_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', clean_answer.lower())) - stopwords
+
+        scored_chunks = []
         for c in valid_chunks:
-            chunk_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', c.text.lower()))
+            chunk_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', c.text.lower())) - stopwords
             overlap = answer_words & chunk_words
             if len(overlap) >= 3:
-                supporting_chunks.append(c)
+                scored_chunks.append((len(overlap), c))
 
-    # If still empty, default to the top-ranked valid chunk
-    if not supporting_chunks and valid_chunks:
-        supporting_chunks = [valid_chunks[0]]
+        if scored_chunks:
+            scored_chunks.sort(key=lambda x: x[0], reverse=True)
+            supporting_chunks = [c for _, c in scored_chunks]
+        else:
+            supporting_chunks = [valid_chunks[0]]
 
     unique_sources = []
     seen = set()

@@ -358,11 +358,12 @@ for idx, msg in enumerate(st.session_state.messages):
             st.markdown("##### 📚 Sources Used:")
             
             raw_chunks = msg.get("retrieved_chunks", [])
+            valid_sources = msg.get("sources", [])
             file_chunks_map = {}
-            for chunk in raw_chunks:
-                if chunk.filename not in file_chunks_map:
-                    file_chunks_map[chunk.filename] = []
-                file_chunks_map[chunk.filename].append(chunk)
+            for fname in valid_sources:
+                matching_chunks = [c for c in raw_chunks if c.filename == fname]
+                if matching_chunks:
+                    file_chunks_map[fname] = matching_chunks
             
             cols = st.columns(max(len(file_chunks_map), 1))
             for c_idx, (fname, chunks_list) in enumerate(file_chunks_map.items()):

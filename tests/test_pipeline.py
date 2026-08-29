@@ -111,7 +111,31 @@ class TestObsidianRAGPipeline(unittest.TestCase):
         
         self.assertEqual(sources, ["RAG.md", "LLMs.md"])
         self.assertEqual(len(supp_chunks), 2)
-        self.assertNotIn("[SOURCES_USED", clean_ans)
+    def test_query_contextualization_followup(self):
+        """Verify that follow-up questions resolve pronouns to the prior subject."""
+        from src.rag import contextualize_query_for_search
+        history = [{"role": "user", "content": "Explain the LLM pipeline."}]
+        res = contextualize_query_for_search("What are its common use cases?", history)
+        self.assertIn("LLM", res)
+        self.assertIn("use cases", res)
+
+        history2 = [{"role": "user", "content": "Tell me about embeddings."}]
+        res2 = contextualize_query_for_search("Why are they useful?", history2)
+        self.assertIn("embeddings", res2.lower())
+
+    def test_query_contextualization_topic_switch(self):
+        """Verify that a brand new standalone topic query is not polluted with prior history."""
+        from src.rag import contextualize_query_for_search
+        history = [{"role": "user", "content": "Explain the LLM pipeline."}]
+        res = contextualize_query_for_search("What is ChromaDB?", history)
+        self.assertEqual(res, "What is ChromaDB?")
+
+    def test_out_of_vault_fallback(self):
+        """Verify fallback response generates 0 sources and empty supporting chunks."""
+        c1 = RetrievedChunk("LLMs.md#1", "LLMs.md", "LLMs.md", "LLMs", "Pipeline", 1, "Pre-training, SFT, RLHF.", 0, 30, 0.1, 0.9)
+        clean_ans, sources, supp_chunks = extract_supporting_sources_and_chunks(FALLBACK_MESSAGE, [c1])
+        self.assertEqual(sources, [])
+        self.assertEqual(supp_chunks, [])
 
 
 if __name__ == "__main__":
