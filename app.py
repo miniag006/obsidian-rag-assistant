@@ -11,7 +11,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from src.loader import load_vault, NoteDocument
+from src.loader import load_vault, NoteDocument, extract_title_from_markdown
 from src.chunker import chunk_vault, NoteChunk
 from src.vectorstore import VaultVectorStore, RetrievedChunk, get_default_client
 from src.rag import generate_rag_answer, RAGResponse, FALLBACK_MESSAGE, contextualize_query_for_search
@@ -112,6 +112,43 @@ def create_client_for_key(key: str) -> tuple[OpenAI, str, str]:
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
         )
         return client, "gemini-3.6-flash", "text-embedding-004"
+
+
+def get_loaded_note_document(filename_or_path: str) -> NoteDocument | None:
+    """Safely retrieves a NoteDocument by filename, relative path, or direct disk recovery."""
+    notes = st.session_state.get("loaded_notes", {})
+    if filename_or_path in notes:
+        return notes[filename_or_path]
+
+    base_name = Path(filename_or_path).name
+    if base_name in notes:
+        return notes[base_name]
+
+    for k, doc in notes.items():
+        if k.lower() == filename_or_path.lower() or doc.filename.lower() == base_name.lower() or Path(doc.relative_path).name.lower() == base_name.lower():
+            return doc
+
+    # Fallback to direct disk inspection in temp_uploaded_vault or demo_vault
+    for search_dir in [Path("data/temp_uploaded_vault"), Path("data/demo_vault")]:
+        if search_dir.exists():
+            for p in search_dir.rglob("*.md"):
+                if p.name.lower() == base_name.lower():
+                    try:
+                        content = p.read_text(encoding="utf-8", errors="replace")
+                        title = extract_title_from_markdown(content, fallback_title=p.stem)
+                        doc = NoteDocument(
+                            filename=p.name,
+                            relative_path=str(p.relative_to(search_dir)),
+                            title=title,
+                            content=content,
+                            char_count=len(content),
+                            line_count=len(content.splitlines())
+                        )
+                        st.session_state.loaded_notes[p.name] = doc
+                        return doc
+                    except Exception:
+                        pass
+    return None
 
 
 def initialize_vault(vault_path: Path, vault_label: str, active_api_key: str):
@@ -380,7 +417,7 @@ for idx, msg in enumerate(st.session_state.messages):
                         st.session_state.viewing_source = None
                         st.rerun()
 
-                full_doc = st.session_state.loaded_notes.get(src_info["filename"])
+                full_doc = get_loaded_note_document(src_info["filename"])
                 if full_doc:
                     passages = src_info.get("passages", [])
                     highlighted_content, count = highlight_passages_in_markdown(
