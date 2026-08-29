@@ -261,12 +261,14 @@ with st.sidebar:
         if st.button(f"👉 {prompt}", key=f"ex_{prompt}", use_container_width=True):
             st.session_state.current_prompt = prompt
 
-    # Reset Chat Button
-    st.markdown("---")
-    if st.button("🗑️ Clear Chat History", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.viewing_source = None
-        st.rerun()
+    # Reset Chat Button (only displayed when conversation is active)
+    if st.session_state.messages:
+        st.markdown("---")
+        user_msg_count = len([m for m in st.session_state.messages if m.get("role") == "user"])
+        if st.button(f"🗑️ Clear Conversation ({user_msg_count} questions)", use_container_width=True):
+            st.session_state.messages = []
+            st.session_state.viewing_source = None
+            st.rerun()
 
 
 # --- Main Area ---
