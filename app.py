@@ -89,6 +89,9 @@ if "total_chunks" not in st.session_state:
 if "viewing_source" not in st.session_state:
     st.session_state.viewing_source = None  # Dict of chunk details to display in viewer
 
+if "active_viewer_msg_idx" not in st.session_state:
+    st.session_state.active_viewer_msg_idx = None  # Message index currently displaying its viewer
+
 
 def create_client_for_key(key: str) -> tuple[OpenAI, str, str]:
     """Returns configured OpenAI-compatible client, model name, and embedding model."""
@@ -136,6 +139,7 @@ def initialize_vault(vault_path: Path, vault_label: str, active_api_key: str):
             st.session_state.active_model = model_name
             st.session_state.active_embedding = embedding_model
             st.session_state.viewing_source = None
+            st.session_state.active_viewer_msg_idx = None
             st.session_state.vault_load_success = f"Loaded {len(docs)} notes ({indexed_count} chunks)"
             st.session_state.vault_load_error = None
         except Exception as e:
@@ -236,7 +240,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📊 Vault Statistics")
     if st.session_state.vault_name:
-        active_model = getattr(st.session_state, "active_model", "gemini-1.5-flash")
+        active_model = getattr(st.session_state, "active_model", "gemini-3.6-flash")
         active_emb = getattr(st.session_state, "active_embedding", "text-embedding-004")
         st.info(f"**Active Vault:** {st.session_state.vault_name}\n\n"
                 f"- 📄 **Notes Indexed:** {len(st.session_state.loaded_notes)}\n"
@@ -272,6 +276,7 @@ with st.sidebar:
         if st.button(f"🗑️ Clear Conversation ({user_msg_count} questions)", use_container_width=True):
             st.session_state.messages = []
             st.session_state.viewing_source = None
+            st.session_state.active_viewer_msg_idx = None
             st.rerun()
 
 
@@ -303,50 +308,61 @@ for idx, msg in enumerate(st.session_state.messages):
                     label_suffix = f" ({sec_count} sections)" if sec_count > 1 else ""
                     btn_label = f"📄 {fname}{label_suffix}"
                     
+                    is_active = (st.session_state.get("active_viewer_msg_idx") == idx and 
+                                 st.session_state.get("viewing_source", {}).get("filename") == fname)
+                    
+                    btn_type = "primary" if is_active else "secondary"
+                    
                     if st.button(
                         btn_label,
                         key=f"src_btn_{idx}_{c_idx}_{fname}",
-                        help=f"Click to open {fname} and highlight all {sec_count} retrieved passage(s)",
+                        type=btn_type,
+                        help=f"Click to inspect {fname} and highlight {sec_count} passage(s)",
                         use_container_width=True
                     ):
-                        st.session_state.viewing_source = {
-                            "filename": fname,
-                            "title": chunks_list[0].title,
-                            "sections": [c.heading for c in chunks_list],
-                            "passages": [c.text for c in chunks_list],
-                            "max_similarity": max(c.similarity_score for c in chunks_list),
-                            "count": sec_count
-                        }
+                        if is_active:
+                            st.session_state.active_viewer_msg_idx = None
+                            st.session_state.viewing_source = None
+                        else:
+                            st.session_state.active_viewer_msg_idx = idx
+                            st.session_state.viewing_source = {
+                                "filename": fname,
+                                "title": chunks_list[0].title,
+                                "sections": [c.heading for c in chunks_list],
+                                "passages": [c.text for c in chunks_list],
+                                "max_similarity": max(c.similarity_score for c in chunks_list),
+                                "count": sec_count
+                            }
                         st.rerun()
 
+            # Inline Document Viewer rendered right under this specific question's answer!
+            if st.session_state.get("active_viewer_msg_idx") == idx and st.session_state.get("viewing_source"):
+                src_info = st.session_state.viewing_source
+                st.markdown("---")
+                
+                col_hdr, col_btn = st.columns([5, 1])
+                with col_hdr:
+                    st.markdown(f"#### 📖 Source Document: `{src_info['filename']}`")
+                    sections_str = ", ".join(f"`{s}`" for s in src_info.get("sections", []))
+                    st.caption(f"**Sections Cited:** {sections_str} | **Passages Highlighted:** {src_info.get('count', 1)} | **Max Relevance:** {src_info.get('max_similarity', 0):.1%}")
+                with col_btn:
+                    if st.button("✖️ Close Viewer", key=f"close_source_viewer_{idx}", use_container_width=True):
+                        st.session_state.active_viewer_msg_idx = None
+                        st.session_state.viewing_source = None
+                        st.rerun()
 
-# Document / Source Viewer Panel rendered cleanly at the BOTTOM
-if st.session_state.viewing_source:
-    src_info = st.session_state.viewing_source
-    st.markdown("---")
-    
-    col_hdr, col_btn = st.columns([5, 1])
-    with col_hdr:
-        st.markdown(f"### 📖 Source Document: `{src_info['filename']}`")
-        sections_str = ", ".join(f"`{s}`" for s in src_info.get("sections", []))
-        st.caption(f"**Sections Cited:** {sections_str} | **Passages Highlighted:** {src_info.get('count', 1)} | **Max Relevance:** {src_info.get('max_similarity', 0):.1%}")
-    with col_btn:
-        if st.button("✖️ Close Viewer", key="close_source_viewer", use_container_width=True):
-            st.session_state.viewing_source = None
-            st.rerun()
-
-    full_doc = st.session_state.loaded_notes.get(src_info["filename"])
-    if full_doc:
-        passages = src_info.get("passages", [])
-        highlighted_content, count = highlight_passages_in_markdown(
-            full_content=full_doc.content,
-            passages=passages
-        )
-        st.markdown(highlighted_content, unsafe_allow_html=True)
-    else:
-        st.warning(f"Could not find full note for `{src_info['filename']}`.")
-    
-    st.markdown("---")
+                full_doc = st.session_state.loaded_notes.get(src_info["filename"])
+                if full_doc:
+                    passages = src_info.get("passages", [])
+                    highlighted_content, count = highlight_passages_in_markdown(
+                        full_content=full_doc.content,
+                        passages=passages
+                    )
+                    st.markdown(highlighted_content, unsafe_allow_html=True)
+                else:
+                    st.warning(f"Could not find full note for `{src_info['filename']}`.")
+                
+                st.markdown("---")
 
 
 # User Question Input Handling
@@ -358,6 +374,10 @@ if "current_prompt" in st.session_state and st.session_state.current_prompt:
     st.session_state.current_prompt = None
 
 if user_input:
+    # Reset active viewer so the view automatically focuses on the new question
+    st.session_state.active_viewer_msg_idx = None
+    st.session_state.viewing_source = None
+
     # 1. Validation checks
     if not api_key:
         st.error("⚠️ Please provide a Gemini API Key in the sidebar to generate answers.")
